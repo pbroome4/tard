@@ -90,7 +90,6 @@ fn train_tard(){
     });
     
     debug!("{}", tard);
-    let mut t_loss: tard::TardLoss = Default::default();
     let mut opt = AdamConfig::new().init();
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
 
@@ -113,7 +112,7 @@ fn train_tard(){
             match r_games.recv(){
                 Ok(req) =>{
                     el_cnt += req.len();
-                    let train_vec = selfplay_to_training(req, &device);
+                    let train_vec = selfplay_to_training(req);
                     trn_buf.extend_front(train_vec.into_iter());
                 }
                 Err(RecvError) => {

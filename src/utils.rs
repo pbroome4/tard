@@ -50,19 +50,17 @@ impl OutputManager{
 }
 
 
-pub fn selfplay_to_training<G:GameState>(sp_vec: Vec<SelfPlayElement<G>>, device: &Device) -> Vec<TrainingElement>{
+pub fn selfplay_to_training<G:GameState>(sp_vec: Vec<SelfPlayElement<G>>) -> Vec<TrainingElement>{
     let mut te_vec = Vec::with_capacity(sp_vec.len());
     for spe in sp_vec.into_iter(){
         let state_td = TensorData::new(spe.g.to_tensor(),
                                    [G::N_CHAN, G::ROWS, G::COLS]);
-        let state = Tensor::from_data(state_td, device);
         let mcts_td = TensorData::new(spe.mcts_post, [G::ACTN_SPC_SIZE]);
-        let mcts_post = Tensor::from_data(mcts_td, device);
-        let outcome = Tensor::from_floats([spe.outcome], device);
+        let outcome_td = TensorData::new(vec![spe.outcome], [1]);
         let te = TrainingElement{
-            state: state,
-            mcts_posterior: mcts_post,
-            outcome: outcome
+            state: state_td,
+            mcts_posterior: mcts_td,
+            outcome: outcome_td,
         };
         te_vec.push(te);
     }

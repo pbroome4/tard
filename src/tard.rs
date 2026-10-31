@@ -146,9 +146,9 @@ impl ResNet{
 ////// Training structures and Batch Utilities ////
 #[derive(Clone, Debug)]
 pub struct TrainingElement{
-    pub state: Tensor<3>,       
-    pub mcts_posterior: Tensor<1>,
-    pub outcome: Tensor<1>,
+    pub state: TensorData,       // rank 3       
+    pub mcts_posterior: TensorData,  // rank 1
+    pub outcome: TensorData,         // rank 1
 }
 
 pub struct TrainingBatch{
@@ -158,14 +158,17 @@ pub struct TrainingBatch{
 }
 
 impl TrainingBatch{
-    pub fn from_training_elements(v: &Vec<TrainingElement>) -> TrainingBatch{
+    pub fn from_training_elements(v: &Vec<TrainingElement>, device: &Device) -> TrainingBatch{
         let mut states = Vec::with_capacity(v.len());
         let mut mcts_posteriors = Vec::with_capacity(v.len());
         let mut outcomes = Vec::with_capacity(v.len());
-        for te in v.iter(){
-            states.push(te.state.clone());
-            mcts_posteriors.push(te.mcts_posterior.clone());
-            outcomes.push(te.outcome.clone());
+        for te in v.into_iter(){
+            let state_tens = Tensor::<3>::from_data(te.state.clone(), device);
+            let mcts_tens = Tensor::<1>::from_data(te.mcts_posterior.clone(), device);
+            let outcome_tens = Tensor::<1>::from_data(te.outcome.clone(), device);
+            states.push(state_tens);
+            mcts_posteriors.push(mcts_tens);
+            outcomes.push(outcome_tens);
         }
         let state_batch = Tensor::stack(states, 0);
         let mcts_posterior_batch = Tensor::stack(mcts_posteriors, 0);
@@ -214,7 +217,8 @@ impl Default for TardLoss{
 }
 
 pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> TardLoss{
-    let mut batch = TrainingBatch::from_training_elements(v);
+    let device = t.devices().iter().next().unwrap().clone();
+    let mut batch = TrainingBatch::from_training_elements(v, &device);
     batch.state = batch.state.autodiff().require_grad();
     batch.mcts_posterior = batch.mcts_posterior.autodiff().require_grad();
     batch.outcome = batch.outcome.autodiff().require_grad();
