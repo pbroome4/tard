@@ -37,7 +37,7 @@ impl OutputManager{
                                   .append(true)
                                   .write(true)
                                   .open(&loss_f)?;
-        lf.write(b"loss, cross_entropy_loss, mse_loss\n")?;
+        lf.write(b"loss, cross_entropy_loss, mse_loss, learning_rate\n")?;
 
         let s = Self {
             basepath_d: basepath_d,
@@ -99,6 +99,16 @@ pub fn read_move() -> Result<(usize, usize), String>{
         } 
     }
 }
+
+pub fn read_yn() -> bool{
+    let mut input_buffer = String::new();
+    io::stdin().read_line(&mut input_buffer).unwrap();
+    if input_buffer.contains("y"){
+        return true;
+    }
+    return false;
+    
+} 
 
 
 pub fn legalize_policy(mut p: Vec<f32>, g: &impl GameState) -> Vec<f32>{

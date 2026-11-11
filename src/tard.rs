@@ -38,23 +38,23 @@ impl Tard {
                device: &Device) -> Self
     {
         info!("Creating Tard in_chan:{}, rows: {},  cols:{}", in_chan, rows, cols);
-        let conv1 = Conv2dConfig::new([in_chan, 64], [3, 3])
+        let conv1 = Conv2dConfig::new([in_chan, 128], [3, 3])
             .with_padding(nn::PaddingConfig2d::Explicit(1, 1, 1, 1))
             .init(device);
-        let bn1 = BatchNormConfig::new(64).init(device);
+        let bn1 = BatchNormConfig::new(128).init(device);
         let mut resnets = Vec::new();
-        for i in 0..6{ // N resnet layers
-            resnets.push(ResNet::new(64, device));
+        for i in 0..10{ // N resnet layers
+            resnets.push(ResNet::new(128, device));
         }
 
-        let policy_conv = Conv2dConfig::new([64, 2], [1, 1]).init(device);
+        let policy_conv = Conv2dConfig::new([128, 2], [1, 1]).init(device);
         let policy_bn = BatchNormConfig::new(2).init(device);
         let policy_fc = LinearConfig::new(2 * rows * cols, rows * cols).init(device);
 
-        let value_conv = Conv2dConfig::new([64, 1], [1, 1]).init(device);
+        let value_conv = Conv2dConfig::new([128, 1], [1, 1]).init(device);
         let value_bn = BatchNormConfig::new(1).init(device);
-        let value_fc1 = LinearConfig::new(action_space_size, 64).init(device);
-        let value_fc2 = LinearConfig::new(64, 1).init(device);
+        let value_fc1 = LinearConfig::new(action_space_size, 128).init(device);
+        let value_fc2 = LinearConfig::new(128, 1).init(device);
 
         let s = Self {
                 conv1,
@@ -219,22 +219,24 @@ impl Default for TardLoss{
 pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> TardLoss{
     let device = t.devices().iter().next().unwrap().clone();
     let mut batch = TrainingBatch::from_training_elements(v, &device);
-    batch.state = batch.state.autodiff().require_grad();
-    batch.mcts_posterior = batch.mcts_posterior.autodiff().require_grad();
-    batch.outcome = batch.outcome.autodiff().require_grad();
+    //batch.state = batch.state.autodiff().require_grad();
+    //batch.mcts_posterior = batch.mcts_posterior.autodiff().require_grad();
+    //batch.outcome = batch.outcome.autodiff().require_grad();
     let (tard_policy_batch, tard_value_batch) = t.forward(batch.state);
     
     // policy networkloss
+    debug!("mcts_posterior_logits: {}", batch.mcts_posterior);
+    debug!("tard_policy_logits: {}", tard_policy_batch);
     let mcts_posterior_probs = batch.mcts_posterior.exp();
     debug_assert!(mcts_posterior_probs.shape() == tard_policy_batch.shape());
     let cross_entropy_terms = mcts_posterior_probs * tard_policy_batch;
     let cross_entropy_loss = cross_entropy_terms.sum_dim(1)
-                                                .neg()
-                                                .mean();
+                                                .mean()
+                                                .neg();
 
     // value network loss
-    debug!("{}", batch.outcome);
-    debug!("{}", tard_value_batch);
+    debug!("batch_outcome: {}", batch.outcome);
+    debug!("tard_value_batch: {}", tard_value_batch);
     debug_assert!(tard_value_batch.shape() == batch.outcome.shape());
     let mse_loss = (tard_value_batch - batch.outcome).powf_scalar(2.0)
                                                      .mean();

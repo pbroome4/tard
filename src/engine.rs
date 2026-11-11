@@ -376,9 +376,9 @@ fn exp (v: &Vec<f32>) -> Vec<f32>{
 
 #[derive(Debug, Clone)]
 pub struct DirichletHParams{
-    epsilon: f32, // [0,1]. Mixing param. What percent of prior is from dirichlet noise
+    pub epsilon: f32, // [0,1]. Mixing param. What percent of prior is from dirichlet noise
                   // Set to 0 to disable dirichlet noise.
-    alpha: f32, // Concentration parameter.
+    pub alpha: f32, // Concentration parameter.
 }
 
 impl DirichletHParams{

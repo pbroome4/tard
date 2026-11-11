@@ -1,12 +1,15 @@
 use std::fs::{OpenOptions};
 use std::io::{Write};
 use std::thread::{self, JoinHandle};
+use burn::lr_scheduler::cosine::CosineAnnealingLrSchedulerConfig;
+use burn::lr_scheduler::linear::LinearLrSchedulerConfig;
+use burn::lr_scheduler::module_lr_scheduler::ModuleLearningRate;
 use burn::module::Module;
 use tracing::{debug, info, warn};
 use tracing_subscriber::{prelude::*};
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 use burn::tensor::{Device};
-use burn::optim::{AdamConfig, GradientsParams};
+use burn::optim::{AdamConfig, AdamWConfig, GradientsParams};
 use crossbeam::channel::{Receiver, RecvError, SendError, Sender};
 use std::path::{Path};
 
@@ -65,15 +68,20 @@ fn main(){
 
 fn train_tard(){
     ///// Configs ////////////
-    let n_worker_threads = 30;
-    let n_rollouts = 200;
-    let n_elements_per_train = 2048;
-    let first_n_elements_train = 10000;   
-    let n_training_steps_per_iter = 32; // aim for data re-use of ~2.
+    let n_worker_threads = 200;
+    let n_rollouts = 800;
+    let n_training_steps_per_iter = 512; 
     let batch_size = 128;
-    let train_mem_capacity: usize = 10_000_000; // keep most recent 200k games
-    let dirchlet_hyper_params = DirichletHParams::from_gamestate::<PenteState>();
-    let learning_rate = 1e-4;
+    let n_elements_per_train = n_training_steps_per_iter * batch_size / 2; // ~= data reuse of 2
+    let first_n_elements_train = 5*n_elements_per_train;   
+    let train_mem_capacity: usize = 10 * n_elements_per_train; // Keep most recent 10 model training generation states
+    let dirchlet_hyper_params = DirichletHParams{
+        epsilon: 0.2,
+        alpha: 20.0 / PenteState::ACTN_SPC_SIZE as f32
+    };
+    let max_learning_rate = 0.01;
+    let min_learning_rate = 0.0002;
+    let n_training_steps = 200_000;
 
     let om = OutputManager::new("output", false).unwrap();
     let device = Device::default().autodiff();
@@ -88,13 +96,14 @@ fn train_tard(){
             PenteState::ACTN_SPC_SIZE,
             &device)
     });
-    
     debug!("{}", tard);
-    let mut opt = AdamConfig::new().init();
+    let mut opt = AdamWConfig::new().with_weight_decay(1e-4).init();
+    let mut lr = CosineAnnealingLrSchedulerConfig::new(max_learning_rate, n_training_steps)
+        .with_min_lr(min_learning_rate)
+        .init()
+        .unwrap();
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
-
     let eval_srv = CBatchedTardEvalServer::new(&tard);
-    
     let (s_games, r_games) = crossbeam::channel::bounded(4096);
     let handles = spawn_workers::<PenteState>(
         n_worker_threads,
@@ -103,10 +112,12 @@ fn train_tard(){
         n_rollouts,
         dirchlet_hyper_params);       
     let mut is_running = true;
-    let mut epoch = 0;
+    let mut train_step_cnt = 0;
     let mut el_cnt_threshold = first_n_elements_train;
+    let mut t_loss = TardLoss::default();
+    let mut current_lr = ModuleLearningRate::default();
     while is_running{
-        info!("Sampling Self-Play Games");
+        info!("Awaiting Self-Play Games");
         let mut el_cnt = 0;
         while el_cnt < el_cnt_threshold{ 
             match r_games.recv(){
@@ -125,44 +136,42 @@ fn train_tard(){
         }
         el_cnt_threshold = n_elements_per_train; // After epoch 0, use this instead
         
-        info!("Performing training epoch {}", epoch);
-        let mut t_loss = TardLoss::default();
+        info!("Performing training {}/{}", train_step_cnt, n_training_steps);
         for _ in 0..n_training_steps_per_iter{
             let trn_samples = trn_buf.sample(batch_size);
             t_loss = compute_loss(&tard, &trn_samples);
-            debug!("{}", t_loss);
+            debug!("t_loss: {}", t_loss);
             let grads = t_loss.loss.backward();
             let grad_params = GradientsParams::from_grads(grads, &tard);
-            tard = opt.step(learning_rate, tard, grad_params);
+            current_lr = lr.step();
+            tard = opt.step(current_lr.base(), tard, grad_params);
+            train_step_cnt += 1;
         }
-        info!("Training epoch {} complete", epoch);
+        info!("Training batch completed. Progress {}/{} complete", train_step_cnt, n_training_steps);
         info!("Loss after training: {}", t_loss);
-        
+    
         info!("Updating Evaluator Thread");
         eval_srv.update(&tard);
 
-        if epoch % 100 == 0{
-            info!("Saving model");
-            let model_name = format!("model_{}", epoch);
-            tard.clone().save_file(om.model_d.join(model_name))
-                        .expect("Unable to save model");
-            info!("Saving loss");
-            let mut lf = OpenOptions::new()
-                                  .write(true)
-                                  .append(true)
-                                  .open(&om.loss_f).unwrap();
-            writeln!(lf,
-                     "{}, {}, {}",
-                     t_loss.loss.clone()
+        info!("Saving model");
+        let model_name = format!("model_{}", train_step_cnt);
+        tard.clone().save_file(om.model_d.join(model_name))
+                    .expect("Unable to save model");
+        info!("Saving loss");
+        let mut lf = OpenOptions::new()
+                                .write(true)
+                                .append(true)
+                                .open(&om.loss_f).unwrap();
+        writeln!(lf,
+                    "{}, {}, {}, {}",
+                    t_loss.loss.clone()
+                            .into_scalar::<f32>(),
+                    t_loss.cross_entropy_loss.clone()
+                                            .into_scalar::<f32>(),
+                    t_loss.mse_loss.clone()
                                 .into_scalar::<f32>(),
-                     t_loss.cross_entropy_loss.clone()
-                                              .into_scalar::<f32>(),
-                     t_loss.mse_loss.clone()
-                                    .into_scalar::<f32>(),
-                    ).unwrap();
-        }
-
-        epoch += 1;
+                    current_lr.base()
+                ).unwrap();
     }
     info!("Main thread loop over");
     drop(r_games);
