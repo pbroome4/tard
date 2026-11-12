@@ -10,8 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build --release                      # build (use --release for anything performance-sensitive)
-cargo run --release --bin pentard -- --mode batched   # self-play training (src/main.rs); --mode single|batched|replicated, also --workers, --rollouts, --eval-batch-size
-cargo run --release --bin inference        # play against the model in ./model.bpk
+cargo run --release --bin pentard -- --mode batched   # self-play training (src/main.rs); --mode single|batched|replicated, also --workers, --rollouts, --eval-batch-size, --model, --output-dir
+cargo run --release --bin inference -- --model model.bpk   # play against a trained model (default ./model.bpk)
 cargo run --release --bin interactive      # human-vs-human Pente in the terminal (no AI)
 ```
 
@@ -22,10 +22,10 @@ cargo run --release --bin interactive      # human-vs-human Pente in the termina
 
 ## Architecture
 
-The training loop lives in `src/main.rs` (`train_tard`). Training hyperparameters (batch size, LR schedule, Dirichlet noise) are hardcoded locals at the top of it; worker count, rollouts, and mode come from CLI args. Each iteration:
+The training loop lives in `src/main.rs` (`train_tard`). Training hyperparameters (batch size, LR schedule, Dirichlet noise) are hardcoded locals at the top of it; mode, worker count, rollouts, starting model, and output directory come from CLI args. At startup, `utils::OutputManager::new(output_dir)` creates a fresh `<output-dir>/run_<unix_seconds>/` directory (it never deletes or reuses earlier runs), and the model is loaded from `--model` if that file exists, otherwise freshly initialized. Each iteration:
 1. Pulls finished games from a `Box<dyn selfplay::SelfPlaySource<G>>` (`next_game`) into a `tard::TrainingBuffer` (bounded replay buffer).
 2. Runs `n_training_steps_per_iter` AdamW steps with cosine-annealed LR.
-3. Pushes new weights back with `source.update_model(&tard)`, saves `output/models/model_<step>.bpk`, and appends to `output/loss.csv`.
+3. Pushes new weights back with `source.update_model(&tard)`, saves `<run_dir>/models/model_<step>.bpk`, and appends to `<run_dir>/loss.csv`.
 
 Self-play sources (`--mode`), in `src/selfplay.rs`:
 - `SingleThreaded`: runs `engine::run_self_play` inline with a local `TardEvaluator`.
@@ -41,9 +41,9 @@ Key abstractions:
 - **MCTS (`engine.rs`)**: arena-allocated `MctsTree` (root is `NodeId` 0, children as first-child/next-sibling linked lists), PUCT selection, Dirichlet noise added to root priors (`DirichletHParams`; `epsilon=0` disables it). `mcts()` returns **log** posterior probabilities; callers `exp()` before sampling. The model's policy head also outputs log-softmax.
 - **Model (`tard.rs`)**: `Tard`, a 128-channel conv trunk with 10 residual blocks plus policy and value heads. `compute_loss` = cross-entropy against the MCTS posterior + MSE against the game outcome.
 
-## Gotchas
+## Notes
 
-- `OutputManager::new("output", false)` in `train_tard` **deletes the entire `output/` directory** when training starts. Copy any checkpoints you want to keep out of `output/models/` first.
-- Training resumes from, and `inference` loads, `./model.bpk` in the repo root. `utils::load_model` ignores its `path` argument and always reads `"model.bpk"`. To continue from a checkpoint, copy `output/models/model_<step>.bpk` to `model.bpk`.
+- To resume training from a checkpoint, pass it directly: `--model output/run_<ts>/models/model_<step>.bpk`. If the `--model` file exists but fails to load (corrupt, or the architecture changed), training panics rather than silently starting fresh; if it doesn't exist, training starts from scratch.
+- Older runs (before per-run directories) left checkpoints directly in `output/models/` and `output/loss.csv`; these are no longer written to.
 - `*.bpk`, `output/`, `*.data`, and `*.svg` are gitignored. Model files and `perf.data` (several GB) live untracked in the repo root.
-- `GameState::apply_action` with an illegal action is UB by contract; only a `debug_assert!` guards it.
+- `PenteState::apply_action` panics (`assert!`, in release builds too) on an illegal action. Callers should pick actions from `legal_actions_mask` or check `is_legal_action`; `PenteState::play(row, col)` is the non-panicking variant that returns `false` instead.

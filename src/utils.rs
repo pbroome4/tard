@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use tracing::{trace, debug, info};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+use std::time::{SystemTime, UNIX_EPOCH};
 use burn::tensor::{Tensor, Device,TensorData};
 use burn::store::{ModuleRecord, RecordError};
 use burn::module::Module;
@@ -19,25 +20,33 @@ pub struct OutputManager{
 }
 
 impl OutputManager{
-    pub fn new<P: Into<PathBuf>>(b: P, append: bool) -> io::Result<Self>{
-        let basepath_d = b.into();
+    /// Creates a fresh run directory `<root>/run_<unix_seconds>/` containing
+    /// `models/` and `loss.csv`. Never deletes or overwrites earlier runs.
+    pub fn new<P: Into<PathBuf>>(root: P) -> io::Result<Self>{
+        let root_d = root.into();
+        fs::create_dir_all(&root_d)?;
+        let secs = SystemTime::now().duration_since(UNIX_EPOCH)
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0);
+        // create_dir (not create_dir_all) fails if the directory already
+        // exists, so we never write into another run's directory.
+        let mut basepath_d = root_d.join(format!("run_{}", secs));
+        let mut suffix = 1;
+        while let Err(e) = fs::create_dir(&basepath_d){
+            if e.kind() != io::ErrorKind::AlreadyExists{
+                return Err(e);
+            }
+            basepath_d = root_d.join(format!("run_{}_{}", secs, suffix));
+            suffix += 1;
+        }
+        info!("Created run directory {}", basepath_d.display());
         let model_d = basepath_d.join("models");
         let loss_f = basepath_d.join("loss.csv");
-
-        if append == false{
-            info!("Deleting directory {}", basepath_d.display());
-            fs::remove_dir_all(&basepath_d);
-        }
-        if !fs::exists(&model_d).unwrap(){
-            info!("Creating directory {}", basepath_d.display());
-            fs::create_dir_all(&basepath_d)?;
-            fs::create_dir_all(&model_d)?;
-        }
-        let mut lf = OpenOptions::new().create(true)
-                                  .append(true)
+        fs::create_dir(&model_d)?;
+        let mut lf = OpenOptions::new().create_new(true)
                                   .write(true)
                                   .open(&loss_f)?;
-        lf.write(b"loss, cross_entropy_loss, mse_loss, learning_rate\n")?;
+        lf.write_all(b"loss, cross_entropy_loss, mse_loss, learning_rate\n")?;
 
         let s = Self {
             basepath_d: basepath_d,
@@ -139,9 +148,8 @@ pub fn load_model(p: &Path, device: &Device) -> Result<Tard, RecordError>{
                              PenteState::COLS,
                              PenteState::ACTN_SPC_SIZE,
                              &device);
-    let model_file = "model.bpk";
-    info!("Loading model record: {}", model_file);
-    let record = ModuleRecord::load(model_file)?;
+    info!("Loading model record: {}", p.display());
+    let record = ModuleRecord::load(p)?;
     info!("Loading record into tard");
     tard = tard.load_record(record);
     info!("Tard model loaded");

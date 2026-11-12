@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 use burn::tensor::{Device};
 use burn::optim::{AdamWConfig, GradientsParams};
-use std::path::{Path};
+use std::path::PathBuf;
 
 use pentard::gamestate::GameState;
 use pentard::pente::PenteState;
@@ -60,6 +60,16 @@ struct Args{
     /// Max batch size for the batched eval server
     #[arg(long, default_value_t = 1024)]
     eval_batch_size: usize,
+
+    /// Model to resume training from. If the file doesn't exist, training
+    /// starts from a freshly initialized model.
+    #[arg(long, default_value = "model.bpk")]
+    model: PathBuf,
+
+    /// Root directory for outputs. Each run writes to a new
+    /// `<output-dir>/run_<unix_seconds>/` subdirectory.
+    #[arg(long, default_value = "output")]
+    output_dir: PathBuf,
 }
 
 
@@ -89,19 +99,23 @@ fn train_tard(args: &Args){
     let min_learning_rate = 0.0002;
     let n_training_steps = 200_000;
 
-    let om = OutputManager::new("output", false).unwrap();
+    let om = OutputManager::new(&args.output_dir).unwrap();
     let device = Device::default().autodiff();
     info!("Using Device: {:?}", device);
-    info!("Attempting to load existing model");
-    let mut tard = load_model(Path::new("model.bpk"), &device).unwrap_or_else(|_|{
-        info!("No Tard model found to load, creating fresh instance");
+    let mut tard = if args.model.exists(){
+        info!("Resuming from model {}", args.model.display());
+        load_model(&args.model, &device).unwrap_or_else(|e|{
+            panic!("Failed to load model {}: {:?}", args.model.display(), e)
+        })
+    }else{
+        info!("No model at {}, creating fresh instance", args.model.display());
         tard::Tard::new(
             PenteState::N_CHAN,
             PenteState::ROWS,
             PenteState::COLS,
             PenteState::ACTN_SPC_SIZE,
             &device)
-    });
+    };
     debug!("{}", tard);
     let mut opt = AdamWConfig::new().with_weight_decay(1e-4).init();
     let mut lr = CosineAnnealingLrSchedulerConfig::new(max_learning_rate, n_training_steps)

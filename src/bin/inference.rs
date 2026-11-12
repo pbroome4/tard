@@ -1,7 +1,7 @@
 
-use burn::module::Module;
-use burn::store::ModuleRecord;
 use burn::tensor::{Device};
+use clap::Parser;
+use std::path::PathBuf;
 use tracing::{info};
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 use std::io::{self, Write};
@@ -10,11 +10,19 @@ use std::ptr::read;
 use pentard::evaluator::TardEvaluator;
 use pentard::gamestate::GameState;
 use pentard::pente::{PenteState, action_2_coord};
-use pentard::tard::Tard;
 use pentard::utils::*;
 use pentard::engine::*;
 
+#[derive(Parser, Debug)]
+#[command(about = "Play Pente against a trained Tard model")]
+struct Args{
+    /// Model file to play against
+    #[arg(long, default_value = "model.bpk")]
+    model: PathBuf,
+}
+
 fn main(){
+    let args = Args::parse();
     let mut filter = EnvFilter::from_default_env()
         .add_directive(LevelFilter::WARN.into());
     filter = filter.add_directive("pentard=info".parse().unwrap());
@@ -26,17 +34,9 @@ fn main(){
     info!("Starting inference");
     let device = Device::default();
     info!("Device: {:?}", &device);
-    let mut tard = Tard::new(PenteState::N_CHAN,
-                             PenteState::ROWS,
-                             PenteState::COLS,
-                             PenteState::ACTN_SPC_SIZE,
-                             &device);
-    let model_file = "model.bpk";
-    info!("Loading model record: {}", model_file);
-    let record = ModuleRecord::load(model_file).unwrap();
-    info!("Loading record into tard");
-    tard = tard.load_record(record);
-    info!("Tard model loaded");
+    let tard = load_model(&args.model, &device).unwrap_or_else(|e|{
+        panic!("Failed to load model {}: {:?}", args.model.display(), e)
+    });
     let mut eval = TardEvaluator::new(&tard);
 
     let mut g = PenteState::new();

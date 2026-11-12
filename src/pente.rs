@@ -80,7 +80,7 @@ impl GameState for PenteState{
     
     fn apply_action(&mut self, action: usize){
         trace!("Applying action {}", action);
-        debug_assert!(self.is_legal_action(action), "Illegal action {} for board \n{}", action, self);
+        assert!(self.is_legal_action(action), "Illegal action {} for board \n{}", action, self);
         let (row,col) = action_2_coord(action);
         if self.is_black_{
             self.board_[row][col] = Piece::Black;
@@ -126,6 +126,11 @@ impl PenteState{
 
     // Current player plays at provided space
     pub fn play(&mut self, row: usize, col: usize) -> bool{
+        // Bounds-check before flattening: e.g. (0, COLS) would otherwise
+        // wrap to the legal action for (1, 0).
+        if row >= PenteState::ROWS || col >= PenteState::COLS{
+            return false;
+        }
         let action = coord_2_action(row,col);
         if self.is_legal_action(action){
             self.apply_action(action);
