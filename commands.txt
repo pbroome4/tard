@@ -1,7 +1,0 @@
-export RUST_BACKTRACE=1
-export CUDA_PATH=/usr/local/cuda
-
-
-sudo sysctl -w kernel.perf_event_paranoid=-1
-sudo sysctl kernel.kptr_restrict=0
-cargo flamegraph --dev --min-width 0.0 -b pentard

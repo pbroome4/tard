@@ -15,7 +15,7 @@ cargo run --release --bin inference -- --model model.bpk   # play against a trai
 cargo run --release --bin interactive      # human-vs-human Pente in the terminal (no AI)
 ```
 
-- Environment (from `commands.txt`): `export CUDA_PATH=/usr/local/cuda`, `RUST_BACKTRACE=1`. `CUDA_PATH` must contain `nvvm/libdevice/libdevice.10.bc` or GPU kernels fail to compile at the first tensor readback ("libdevice.10.bc was not found"); on this machine that is `/usr/lib/cuda`, since `/usr/local/cuda` does not exist. burn is built with the `cuda`, `fusion`, and `flex` features; `Device::default()` picks the backend.
+- Leave `CUDA_PATH` unset: cubecl then searches `/usr/local/cuda`, `/opt/cuda`, `/usr/lib/cuda`, `/usr` for `nvvm/libdevice/libdevice.10.bc`. Pointing it at a path without that file (e.g. `/usr/local/cuda`, which doesn't exist here) makes GPU kernels fail at the first tensor readback with "libdevice.10.bc was not found". burn is built with the `cuda`, `fusion`, and `flex` features; `Device::default()` picks the backend.
 - Logging uses `tracing` with `EnvFilter`; defaults are `warn` globally and `pentard=info`. Override with e.g. `RUST_LOG=pentard=debug`.
 - Profiling: `cargo flamegraph --dev --min-width 0.0 -b pentard` (requires `sudo sysctl -w kernel.perf_event_paranoid=-1` and `kernel.kptr_restrict=0`).
 - There is no test suite. `src/bin/burn_test.rs` and `src/bin/crossbeam_test.rs` are scratch experiments, not tests.
