@@ -128,7 +128,7 @@ fn run_server<G:GameState>(
             trace!("Added {} elements to queue", n);
             is_running &= recv_connected;
         }
-        if q.len() > 0{
+        if !q.is_empty(){
             let batch_size = std::cmp::min(q.len(), max_batch_size);
             trace!("Computing batch of size {}", batch_size);
             let b_tens = batch_eval_tensor::<G>(&q, &device, batch_size);
@@ -202,7 +202,7 @@ fn read_queue(
     let n = q.len();
     let mut is_connected = true;
     // Empty queue can just block read because no other requests are waiting
-    if q.len() == 0{
+    if q.is_empty(){
         trace!("Queue is empty, performing blocking read");
         match r.recv(){
             Ok(req) => q.push_back(req),

@@ -1,14 +1,11 @@
 
 use std::io::{self, Write}; // Bring the I/O traits into scope
 use std::str::FromStr;
-use tracing::debug;
 use tracing::Level;
-use tracing_subscriber;
 use clap::Parser;
 
 use pentard::pente::*;
 use pentard::gamestate::*;
-use pentard::engine::*;
 use pentard::utils::*;
 
 
@@ -18,16 +15,11 @@ struct Args{
     /// trace, debug, info, warning, or error. Default info
     #[arg(short, long, default_value = "info")]
     log_level: String,
-    
-    /// Number of nodes to explore. Default 1,000
-    #[arg(short, long, default_value = "1000")]
-    n: u64,
 }
 
 
 fn main(){
     let args = Args::parse();
-    println!("{}", args.log_level);
     tracing_subscriber::fmt()
         .with_max_level(Level::from_str(&args.log_level).unwrap()) // Set max level: TRACE, DEBUG, INFO, WARN, ERROR, or OFF
         .init();
@@ -35,7 +27,6 @@ fn main(){
     let mut brd = PenteState::new();
     loop{
         println!("\n{}", brd);
-        //mcts(&brd, args.n);
         let player: &str = brd.active_plyr_str();
         print!("Enter move for {player} as row, col: ");
         io::stdout().flush().unwrap();

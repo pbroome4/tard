@@ -53,7 +53,8 @@ struct Args{
     #[arg(long, default_value_t = 200)]
     workers: usize,
 
-    /// MCTS rollouts per move
+    /// MCTS visits per move. Self-play keeps the chosen move's subtree, and
+    /// its visits count toward this
     #[arg(long, default_value_t = 800)]
     rollouts: usize,
 
@@ -283,7 +284,6 @@ fn train_tard(args: &Args){
            .expect("Unable to save optimizer state");
         info!("Saving loss");
         let mut lf = OpenOptions::new()
-                                .write(true)
                                 .append(true)
                                 .open(&om.loss_f).unwrap();
         writeln!(lf, "{}, {}, {}, {}", mean_loss, mean_ce, mean_mse, current_lr.base()).unwrap();

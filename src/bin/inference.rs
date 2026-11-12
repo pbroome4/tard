@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use tracing::{info};
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 use std::io::{self, Write};
-use std::ptr::read;
 
 use pentard::evaluator::TardEvaluator;
 use pentard::gamestate::GameState;

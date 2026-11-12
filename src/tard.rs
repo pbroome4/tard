@@ -3,12 +3,11 @@ use burn::nn::conv::{Conv2d, Conv2dConfig};
 use burn::nn::{BatchNorm, BatchNormConfig, Linear, LinearConfig};
 use burn::tensor::Device;
 use burn::tensor::activation::{relu, tanh, log_softmax};
-use tracing::{trace, debug, info};
+use tracing::{debug, info};
 use core::fmt;
 use bounded_vec_deque::BoundedVecDeque;
 use rand::RngExt;
 
-use crate::tard;
 use crate::gamestate::GameState;
 
 // Network size. Checkpoints only load into a network of the same size.
@@ -54,7 +53,7 @@ impl Tard {
             .init(device);
         let bn1 = BatchNormConfig::new(TRUNK_CHANNELS).init(device);
         let mut resnets = Vec::new();
-        for i in 0..RES_BLOCKS{
+        for _ in 0..RES_BLOCKS{
             resnets.push(ResNet::new(TRUNK_CHANNELS, device));
         }
 
@@ -135,10 +134,10 @@ impl ResNet{
         let bn1 = BatchNormConfig::new(num_chan).init(device);
         let bn2 = BatchNormConfig::new(num_chan).init(device);
         let s = Self{
-            conv1: conv1,
-            conv2: conv2,
-            bn1: bn1,
-            bn2:bn2
+            conv1,
+            conv2,
+            bn1,
+            bn2
         };
         return s;
     }
@@ -150,7 +149,7 @@ impl ResNet{
         let out = relu(out);
         let out = self.conv2.forward(out);
         let out = self.bn2.forward(out);
-        let out = relu(out.clone() + identity);
+        let out = relu(out + identity);
         return out;
     }
 }
@@ -218,11 +217,8 @@ impl std::fmt::Display for TardLoss{
 }
 
 pub fn compute_loss<G: GameState>(t: &Tard, v: &[&TrainingElement]) -> TardLoss{
-    let device = t.devices().iter().next().unwrap().clone();
+    let device = t.devices().first().unwrap().clone();
     let batch = TrainingBatch::from_training_elements::<G>(v, &device);
-    //batch.state = batch.state.autodiff().require_grad();
-    //batch.mcts_posterior = batch.mcts_posterior.autodiff().require_grad();
-    //batch.outcome = batch.outcome.autodiff().require_grad();
     let (tard_policy_batch, tard_value_batch) = t.forward(batch.state);
     
     // policy network loss: cross-entropy of the policy's log-probs against
@@ -283,6 +279,10 @@ impl TrainingBuffer{
 
     pub fn len(&self) -> usize{
         return self.memory_.len();
+    }
+
+    pub fn is_empty(&self) -> bool{
+        return self.memory_.is_empty();
     }
 }
 

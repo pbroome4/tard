@@ -1,4 +1,4 @@
-use burn::tensor::{Tensor, TensorData};
+use burn::tensor::{Device, Tensor, TensorData};
 use burn::module::Module;
 
 use crate::gamestate::*;
@@ -57,25 +57,27 @@ impl <G:GameState> Evaluator<G> for NullEvaluator{
 // Runs input state through Tard and returns dual head output
 #[derive(Clone)]
 pub struct TardEvaluator{
-    t: Tard
+    t: Tard,
+    device: Device, // where t lives; looked up once rather than per evaluation
 }
 
 impl TardEvaluator{
     pub fn new(t: &Tard)->Self{
-        return Self {t: t.valid()};
+        let t = t.valid();
+        let device = t.devices()
+                      .into_iter()
+                      .next()
+                      .expect("Expected at least one device");
+        return Self {t, device};
     }
 }
 
 impl <G:GameState> Evaluator<G> for TardEvaluator{
     fn evaluate (&mut self, g: &G) -> (Vec<f32>, f32) {
-        let device = self.t.devices()
-                  .into_iter()
-                  .next()
-                  .expect("Expected at least one device");
+        // A batch of 1
         let state_tens_data = TensorData::new(g.to_tensor(),
-                                 [G::N_CHAN, G::ROWS, G::COLS]);
-        let state_tens = Tensor::<3>::from_data(state_tens_data, &device);
-        let state_batch_tens = Tensor::stack(vec![state_tens], 0);  // Make a batchsize of 1
+                                 [1, G::N_CHAN, G::ROWS, G::COLS]);
+        let state_batch_tens = Tensor::<4>::from_data(state_tens_data, &self.device);
         let (p_batch, v_batch) = self.t.forward(state_batch_tens);
         let p_tens: Tensor<1> = p_batch.flatten(0, -1); // debatch
         let v_tens = v_batch.flatten::<1>(0, -1); // debatch

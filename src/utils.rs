@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
-use tracing::{trace, debug, info, warn};
+use tracing::{info, warn};
 use std::any::Any;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
-use burn::tensor::{Tensor, Device};
+use burn::tensor::Device;
 use burn::store::{ModuleRecord, RecordError};
 use burn::module::Module;
 
@@ -49,9 +49,9 @@ impl OutputManager{
         lf.write_all(b"loss, cross_entropy_loss, mse_loss, learning_rate\n")?;
 
         let s = Self {
-            basepath_d: basepath_d,
-            model_d: model_d,
-            loss_f: loss_f
+            basepath_d,
+            model_d,
+            loss_f
         };
         info!("Created OutputManager: {:?}", s);
         return Ok(s);
@@ -163,7 +163,7 @@ pub fn legalize_policy(mut p: Vec<f32>, g: &impl GameState) -> Vec<f32>{
 pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
     let sum:f32 = v.iter().sum();
     for e in v.iter_mut(){
-        *e = *e/sum;
+        *e /= sum;
     }
     return v;
 }

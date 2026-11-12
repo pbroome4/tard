@@ -14,11 +14,6 @@ pub trait GameState: Default + Clone + fmt::Display + Debug + Send + 'static{
     // One entry per action (length ACTN_SPC_SIZE): true = legal.
     fn legal_actions_mask(&self) -> Vec<bool>;
 
-    // Generate a random legal action (sampled uniformly)
-    // Must only be called in non-terminal state.
-    // Calling in terminal state is UB.
-    //fn get_random_action(&self) -> Action;
-
     // Apply an action. action MUST be a legal action.
     // Implementations should panic on an illegal action or a finished game.
     fn apply_action(&mut self, action: Action);

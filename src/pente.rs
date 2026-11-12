@@ -1,5 +1,5 @@
 use std::{fmt};
-use tracing::{trace, debug, info};
+use tracing::trace;
 
 use crate::gamestate::GameState;
 
@@ -147,18 +147,6 @@ impl PenteState{
         return !self.is_terminal() && row < PenteState::ROWS && col < PenteState::COLS && self.board_[row][col] == Piece::Empty;
     }
     
-    fn legal_actions(&self) -> Vec<usize>{
-        let mut v = Vec::with_capacity(PenteState::ROWS * PenteState::COLS);
-        for row in 0..PenteState::ROWS{
-            for col in 0..PenteState::COLS{
-                if self.board_[row][col] == Piece::Empty{
-                    v.push(coord_2_action(row,col));
-                }
-            }
-        }
-        return v;
-    }
-
     pub fn active_plyr_str(&self) -> &str{
         const PLYR_MAP: [&str; 2] = ["White", "Black"];
         return PLYR_MAP[self.is_black_ as usize];
@@ -257,8 +245,8 @@ impl PenteState{
 }
 
 pub fn coord_2_action(row: usize, col:usize) -> usize{
-        row * PenteState::COLS + col
-    }
+    row * PenteState::COLS + col
+}
 
 pub fn action_2_coord(action: usize) -> (usize, usize){
     let row = action / PenteState::COLS;
@@ -274,7 +262,7 @@ impl fmt::Display for PenteState {
         for col in 0..PenteState::COLS{
             write!(f, "{:02} ", col)?;
         }
-        write!(f,"\n")?;
+        writeln!(f)?;
         for row in 0..PenteState::ROWS{
             write!(f, "{:02}  ", row)?;
             for col in 0..PenteState::COLS{
