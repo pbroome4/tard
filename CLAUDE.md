@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build --release                      # build (use --release for anything performance-sensitive)
-cargo run --release --bin pentard -- --mode batched   # self-play training (src/main.rs); --mode single|batched|replicated, also --workers, --rollouts, --temp-moves, --eval-batch-size, --model, --start-step, --output-dir
+cargo run --release --bin pentard -- --mode batched   # self-play training (src/main.rs); --mode single|batched|replicated, also --workers, --rollouts, --temp-moves, --eval-batch-size, --model, --resume, --output-dir
 cargo run --release --bin inference -- --model model.bpk   # play against a trained model (default ./model.bpk)
 cargo run --release --bin interactive      # human-vs-human Pente in the terminal (no AI)
 ```
@@ -22,10 +22,22 @@ cargo run --release --bin interactive      # human-vs-human Pente in the termina
 
 ## Architecture
 
-The training loop lives in `src/main.rs` (`train_tard`). Everything is configured by CLI args (`--help` lists them): self-play mode/workers/rollouts, and the training hyperparameters (`--total-steps`, `--steps-per-iter`, `--batch-size`, `--max-lr`/`--min-lr`, `--dirichlet-epsilon`/`--dirichlet-alpha`, replay-buffer sizing, etc.) with defaults matching the original hardcoded values. Network size is fixed by the `TRUNK_CHANNELS`/`RES_BLOCKS`/`VALUE_HIDDEN` consts in `tard.rs`, since checkpoints only load into a same-sized network. `loss.csv` records the mean loss over each iteration's steps. At startup, `utils::OutputManager::new(output_dir)` creates a fresh `<output-dir>/run_<unix_seconds>/` directory (it never deletes or reuses earlier runs), and the model is loaded from `--model` if that file exists, otherwise freshly initialized. Each iteration:
+The training loop lives in `src/main.rs` (`train_tard`). Everything is configured by CLI args (`--help` lists them): self-play mode/workers/rollouts, and the training hyperparameters (`--total-steps`, `--steps-per-iter`, `--batch-size`, `--max-lr`/`--min-lr`, `--dirichlet-epsilon`/`--dirichlet-alpha`, replay-buffer sizing, etc.) with defaults matching the original hardcoded values. Network size is fixed by the `TRUNK_CHANNELS`/`RES_BLOCKS`/`VALUE_HIDDEN` consts in `tard.rs`, since checkpoints only load into a same-sized network. At startup the model is loaded from `--resume` (a checkpoint directory) or `--model` (a weights file) or freshly initialized, and only then does `utils::OutputManager::new` create a fresh run directory (it never deletes or reuses earlier runs):
+
+```
+<output-dir>/run_<unix_seconds>/
+  config.json                  # all CLI args (serde-serialized `Args`)
+  metrics.csv                  # per iteration: step, wall_time_s, lr, loss, policy_loss, value_loss,
+                               #   games, positions, mean_game_len, draw_rate (losses are means over the iteration)
+  checkpoints/step_<NNNNNN>/   # zero-padded step
+    model.bpk                  # weights
+    optim.bpk                  # AdamW state
+```
+
+Each iteration:
 1. Pulls finished games from a `Box<dyn selfplay::SelfPlaySource<G>>` (`next_game`) into a `tard::TrainingBuffer` (bounded replay buffer).
 2. Runs `n_training_steps_per_iter` AdamW steps with cosine-annealed LR.
-3. Pushes new weights back with `source.update_model(&tard)`, saves `<run_dir>/models/model_<step>.bpk` plus the AdamW state as `optim_<step>.bpk`, and appends to `<run_dir>/loss.csv`.
+3. Pushes new weights back with `source.update_model(&tard)`, saves `checkpoints/step_<step>/`, and appends a row to `metrics.csv`.
 
 Self-play sources (`--mode`), in `src/selfplay.rs`:
 - `SingleThreaded`: runs `engine::run_self_play` inline with a local `TardEvaluator`.
@@ -43,7 +55,8 @@ Key abstractions:
 
 ## Notes
 
-- To resume training from a checkpoint, pass it directly: `--model output/run_<ts>/models/model_<step>.bpk`. The step is parsed from the `model_<N>` filename (override with `--start-step`); a sibling `optim_<N>.bpk` restores the optimizer and the cosine LR schedule is fast-forwarded to step N. The replay buffer is not persisted, so a resumed run re-does the warm-up fill. Training stops at `n_training_steps`. If the `--model` file exists but fails to load (corrupt, or the architecture changed), training panics rather than silently starting fresh; if it doesn't exist, training starts from scratch.
-- Older runs (before per-run directories) left checkpoints directly in `output/models/` and `output/loss.csv`; these are no longer written to.
+- To continue a run: `--resume output/run_<ts>/checkpoints/step_<N>`. It restores the weights and optimizer, takes N from the directory name, and fast-forwards the cosine LR schedule to step N. The replay buffer is not persisted, so a resumed run re-does the warm-up fill. Training stops at `--total-steps`.
+- `--model <file>` only supplies starting weights (step 0, fresh optimizer); it conflicts with `--resume`. If the file exists but fails to load (corrupt, or the architecture changed), training panics rather than silently starting fresh; if it doesn't exist, training starts from scratch. The `inference` bin takes the same kind of file, e.g. `--model output/run_<ts>/checkpoints/step_<N>/model.bpk`.
+- Older layouts (`models/model_<step>.bpk` + `loss.csv`, or checkpoints directly in `output/models/`) are no longer written. Their model files still work with `--model`; they can't be `--resume`d.
 - `*.bpk`, `output/`, `*.data`, and `*.svg` are gitignored. Model files and `perf.data` (several GB) live untracked in the repo root.
 - `PenteState::apply_action` panics (`assert!`, in release builds too) on an illegal action. Callers should pick actions from `legal_actions_mask` or check `is_legal_action`; `PenteState::play(row, col)` is the non-panicking variant that returns `false` instead.

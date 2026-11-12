@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use std::any::Any;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 use burn::tensor::Device;
@@ -12,17 +12,44 @@ use crate::gamestate::GameState;
 use crate::tard::{Tard, TrainingElement};
 use crate::engine::SelfPlayElement;
 
+/// Layout of one training run:
+///
+/// ```text
+/// <root>/run_<unix_seconds>/
+///   config.json            the run's settings (CLI args), written at start
+///   metrics.csv            one row per training iteration, keyed by step
+///   checkpoints/
+///     step_000512/
+///       model.bpk          network weights
+///       optim.bpk          optimizer state (needed to --resume)
+/// ```
 #[derive(Debug)]
 pub struct OutputManager{
-    pub basepath_d: PathBuf,
-    pub model_d: PathBuf,
-    pub loss_f: PathBuf
+    pub run_d: PathBuf,
+    checkpoints_d: PathBuf,
+    metrics_f: File,
 }
 
+/// One metrics.csv row: training and self-play stats for one iteration.
+pub struct IterationMetrics{
+    pub step: usize,         // training step at the end of the iteration
+    pub wall_time_s: f64,    // seconds since the run started
+    pub lr: f64,             // learning rate of the iteration's last step
+    pub loss: f32,           // mean over the iteration's steps
+    pub policy_loss: f32,    // mean cross-entropy against the MCTS posterior
+    pub value_loss: f32,     // mean squared error against the game outcome
+    pub games: usize,        // self-play games consumed this iteration
+    pub positions: usize,    // positions from those games
+    pub draws: usize,        // how many of those games were draws
+}
+
+const METRICS_HEADER: &str =
+    "step,wall_time_s,lr,loss,policy_loss,value_loss,games,positions,mean_game_len,draw_rate\n";
+
 impl OutputManager{
-    /// Creates a fresh run directory `<root>/run_<unix_seconds>/` containing
-    /// `models/` and `loss.csv`. Never deletes or overwrites earlier runs.
-    pub fn new<P: Into<PathBuf>>(root: P) -> io::Result<Self>{
+    /// Creates a fresh run directory under `root` (see the layout above) and
+    /// writes `config_json` into it. Never deletes or overwrites earlier runs.
+    pub fn new<P: Into<PathBuf>>(root: P, config_json: &str) -> io::Result<Self>{
         let root_d = root.into();
         fs::create_dir_all(&root_d)?;
         let secs = SystemTime::now().duration_since(UNIX_EPOCH)
@@ -40,22 +67,45 @@ impl OutputManager{
             suffix += 1;
         }
         info!("Created run directory {}", basepath_d.display());
-        let model_d = basepath_d.join("models");
-        let loss_f = basepath_d.join("loss.csv");
-        fs::create_dir(&model_d)?;
-        let mut lf = OpenOptions::new().create_new(true)
-                                  .write(true)
-                                  .open(&loss_f)?;
-        lf.write_all(b"loss, cross_entropy_loss, mse_loss, learning_rate\n")?;
-
-        let s = Self {
-            basepath_d,
-            model_d,
-            loss_f
-        };
-        info!("Created OutputManager: {:?}", s);
-        return Ok(s);
+        fs::write(basepath_d.join("config.json"), config_json)?;
+        let checkpoints_d = basepath_d.join("checkpoints");
+        fs::create_dir(&checkpoints_d)?;
+        let mut metrics_f = OpenOptions::new().create_new(true)
+                                              .write(true)
+                                              .open(basepath_d.join("metrics.csv"))?;
+        metrics_f.write_all(METRICS_HEADER.as_bytes())?;
+        return Ok(Self {
+            run_d: basepath_d,
+            checkpoints_d,
+            metrics_f,
+        });
     }
+
+    /// Creates and returns `checkpoints/step_<step>/` (zero-padded so
+    /// directory listings sort by step).
+    pub fn checkpoint_dir(&self, step: usize) -> io::Result<PathBuf>{
+        let d = self.checkpoints_d.join(format!("step_{:06}", step));
+        fs::create_dir(&d)?;
+        return Ok(d);
+    }
+
+    /// Appends one row to metrics.csv.
+    pub fn append_metrics(&mut self, m: &IterationMetrics) -> io::Result<()>{
+        let games = m.games.max(1) as f64;
+        writeln!(self.metrics_f, "{},{:.1},{},{},{},{},{},{},{:.2},{:.4}",
+                 m.step, m.wall_time_s, m.lr, m.loss, m.policy_loss, m.value_loss,
+                 m.games, m.positions, m.positions as f64 / games, m.draws as f64 / games)?;
+        return self.metrics_f.flush();
+    }
+}
+
+/// Parses <N> from a checkpoint directory named `step_<N>`.
+pub fn step_from_checkpoint_dir(p: &Path) -> Option<usize>{
+    return p.file_name()?
+            .to_str()?
+            .strip_prefix("step_")?
+            .parse()
+            .ok();
 }
 
 

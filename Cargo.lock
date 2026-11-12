@@ -4995,6 +4995,8 @@ dependencies = [
  "crossbeam",
  "rand 0.10.3",
  "rand_distr",
+ "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]

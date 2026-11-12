@@ -1,5 +1,3 @@
-use std::fs::{OpenOptions};
-use std::io::{Write};
 use burn::lr_scheduler::cosine::CosineAnnealingLrSchedulerConfig;
 use burn::lr_scheduler::module_lr_scheduler::ModuleLearningRate;
 use burn::module::Module;
@@ -8,7 +6,9 @@ use tracing::{debug, info, warn};
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 use burn::tensor::{Device, Tensor};
 use burn::optim::{AdamWConfig, GradientsParams};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::time::Instant;
+use serde::Serialize;
 
 use pentard::gamestate::GameState;
 use pentard::pente::PenteState;
@@ -35,14 +35,16 @@ use pentard::tard::{self, *};
 //                 whenever the main thread publishes new weights.
 
 
-#[derive(Copy, Clone, Debug, ValueEnum)]
+#[derive(Copy, Clone, Debug, ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
 enum Mode{
     Single,
     Batched,
     Replicated,
 }
 
-#[derive(Parser, Debug)]
+// Serialized as the run's config.json.
+#[derive(Parser, Debug, Serialize)]
 #[command(about = "Train Tard via MCTS self-play")]
 struct Args{
     /// How self-play games are generated
@@ -67,20 +69,22 @@ struct Args{
     #[arg(long, default_value_t = 1024)]
     eval_batch_size: usize,
 
-    /// Model to resume training from. If the file doesn't exist, training
-    /// starts from a freshly initialized model.
+    /// Initial weights to train from, starting at step 0 with a fresh
+    /// optimizer. If the file doesn't exist, training starts from a freshly
+    /// initialized model. To continue a run, use --resume instead.
     #[arg(long, default_value = "model.bpk")]
     model: PathBuf,
+
+    /// Checkpoint directory to continue a run from
+    /// (`<run>/checkpoints/step_<N>`): restores the weights, the optimizer
+    /// state, and step N.
+    #[arg(long, conflicts_with = "model")]
+    resume: Option<PathBuf>,
 
     /// Root directory for outputs. Each run writes to a new
     /// `<output-dir>/run_<unix_seconds>/` subdirectory.
     #[arg(long, default_value = "output")]
     output_dir: PathBuf,
-
-    /// Training step to resume from. Defaults to <N> parsed from a
-    /// `model_<N>.bpk` --model filename, else 0.
-    #[arg(long)]
-    start_step: Option<usize>,
 
     // ---- Training hyperparameters ----
 
@@ -158,11 +162,36 @@ fn train_tard(args: &Args){
     let min_learning_rate = args.min_lr;
     let n_training_steps = args.total_steps;
 
-    let om = OutputManager::new(&args.output_dir).unwrap();
+    let start_time = Instant::now();
     let device = Device::default().autodiff();
     info!("Using Device: {:?}", device);
-    let mut tard = if args.model.exists(){
-        info!("Resuming from model {}", args.model.display());
+    let mut opt = AdamWConfig::new().with_weight_decay(args.weight_decay).init();
+    let mut lr = CosineAnnealingLrSchedulerConfig::new(max_learning_rate, n_training_steps)
+        .with_min_lr(min_learning_rate)
+        .init()
+        .unwrap();
+    let mut train_step_cnt = 0;
+    let mut tard = if let Some(ckpt) = &args.resume{
+        train_step_cnt = step_from_checkpoint_dir(ckpt).unwrap_or_else(||{
+            panic!("--resume {} is not a checkpoint directory named step_<N>", ckpt.display())
+        });
+        info!("Resuming from checkpoint {} at step {}/{}", ckpt.display(), train_step_cnt, n_training_steps);
+        let model_path = ckpt.join("model.bpk");
+        let tard = load_model::<PenteState>(&model_path, &device).unwrap_or_else(|e|{
+            panic!("Failed to load model {}: {:?}", model_path.display(), e)
+        });
+        let optim_path = ckpt.join("optim.bpk");
+        opt = opt.load(&optim_path).unwrap_or_else(|e|{
+            panic!("Failed to load optimizer {}: {:?}", optim_path.display(), e)
+        });
+        // Fast-forward the LR schedule to the resumed step.
+        for _ in 0..train_step_cnt{
+            lr.step();
+        }
+        info!("Replay buffer is not persisted and will refill from self-play.");
+        tard
+    }else if args.model.exists(){
+        info!("Starting from weights {} at step 0", args.model.display());
         load_model::<PenteState>(&args.model, &device).unwrap_or_else(|e|{
             panic!("Failed to load model {}: {:?}", args.model.display(), e)
         })
@@ -171,36 +200,10 @@ fn train_tard(args: &Args){
         Tard::for_game::<PenteState>(&device)
     };
     debug!("{}", tard);
-    let mut opt = AdamWConfig::new().with_weight_decay(args.weight_decay).init();
-    let mut lr = CosineAnnealingLrSchedulerConfig::new(max_learning_rate, n_training_steps)
-        .with_min_lr(min_learning_rate)
-        .init()
-        .unwrap();
-    let mut train_step_cnt = 0;
-    if args.model.exists(){
-        train_step_cnt = args.start_step
-            .or_else(|| step_from_model_path(&args.model))
-            .unwrap_or_else(||{
-                warn!("Could not determine training step for {}; starting at step 0 (pass --start-step to override)",
-                      args.model.display());
-                0
-            });
-        let optim_path = args.model.with_file_name(format!("optim_{}.bpk", train_step_cnt));
-        if optim_path.exists(){
-            info!("Resuming optimizer state from {}", optim_path.display());
-            opt = opt.load(&optim_path).unwrap_or_else(|e|{
-                panic!("Failed to load optimizer {}: {:?}", optim_path.display(), e)
-            });
-        }else{
-            warn!("No optimizer state at {}; using a fresh optimizer", optim_path.display());
-        }
-        // Fast-forward the LR schedule to the resumed step.
-        for _ in 0..train_step_cnt{
-            lr.step();
-        }
-        info!("Resuming at training step {}/{}. Replay buffer is not persisted and will refill from self-play.",
-              train_step_cnt, n_training_steps);
-    }
+    // Created only after loading succeeds, so a bad --resume/--model
+    // doesn't leave an empty run directory behind.
+    let config_json = serde_json::to_string_pretty(args).expect("Unable to serialize config");
+    let mut om = OutputManager::new(&args.output_dir, &config_json).unwrap();
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
 
     info!("Self-play mode: {:?}", args.mode);
@@ -221,10 +224,15 @@ fn train_tard(args: &Args){
     while is_running && train_step_cnt < n_training_steps{
         info!("Awaiting Self-Play Games");
         let mut el_cnt = 0;
+        let (mut games, mut draws) = (0, 0);
         while el_cnt < el_cnt_threshold{
             match source.next_game(){
                 Some(game) =>{
                     el_cnt += game.len();
+                    games += 1;
+                    if game.last().is_some_and(|e| e.outcome == 0.0){
+                        draws += 1;
+                    }
                     let train_vec = selfplay_to_training(game);
                     trn_buf.extend(train_vec);
                 }
@@ -270,34 +278,31 @@ fn train_tard(args: &Args){
         let mean = |t: Tensor<1>| t.into_scalar::<f32>() / n_steps.max(1) as f32;
         let (mean_loss, mean_ce, mean_mse) = (mean(sum_loss), mean(sum_ce), mean(sum_mse));
         info!("Training batch completed. Progress {}/{} complete", train_step_cnt, n_training_steps);
-        info!("Mean loss over {} steps: {} (cross_entropy: {}, mse: {})",
+        info!("Mean loss over {} steps: {} (policy: {}, value: {})",
               n_steps, mean_loss, mean_ce, mean_mse);
 
         info!("Updating self-play model");
         source.update_model(&tard);
 
-        info!("Saving model");
-        let model_name = format!("model_{}", train_step_cnt);
-        tard.clone().save_file(om.model_d.join(model_name))
+        let ckpt = om.checkpoint_dir(train_step_cnt).expect("Unable to create checkpoint directory");
+        info!("Saving checkpoint {}", ckpt.display());
+        tard.clone().save_file(ckpt.join("model.bpk"))
                     .expect("Unable to save model");
-        opt.save(om.model_d.join(format!("optim_{}.bpk", train_step_cnt)))
+        opt.save(ckpt.join("optim.bpk"))
            .expect("Unable to save optimizer state");
-        info!("Saving loss");
-        let mut lf = OpenOptions::new()
-                                .append(true)
-                                .open(&om.loss_f).unwrap();
-        writeln!(lf, "{}, {}, {}, {}", mean_loss, mean_ce, mean_mse, current_lr.base()).unwrap();
+        om.append_metrics(&IterationMetrics{
+            step: train_step_cnt,
+            wall_time_s: start_time.elapsed().as_secs_f64(),
+            lr: current_lr.base(),
+            loss: mean_loss,
+            policy_loss: mean_ce,
+            value_loss: mean_mse,
+            games,
+            positions: el_cnt,
+            draws,
+        }).expect("Unable to write metrics");
     }
     info!("Main thread loop over at training step {}/{}", train_step_cnt, n_training_steps);
     drop(source); // joins worker threads, if any
     info!("Main thread shutting down");
-}
-
-// Parses <N> from a checkpoint path of the form `.../model_<N>.bpk`.
-fn step_from_model_path(p: &Path) -> Option<usize>{
-    p.file_stem()?
-     .to_str()?
-     .strip_prefix("model_")?
-     .parse()
-     .ok()
 }
