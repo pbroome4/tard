@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use pentard::gamestate::GameState;
 use pentard::pente::{self, PenteState};
+use pentard::tard::NetConfig;
 use pentard::engine::*;
 use pentard::evaluator::{BatchedBackend, ReplicatedBackend};
 use pentard::selfplay::{SelfPlaySource, SingleThreaded, WorkerPool};
@@ -34,6 +35,14 @@ use pentard::tard::{self, *};
 //                 whenever the main thread publishes new weights.
 
 
+// Games that can be trained. To add one: implement GameState for it, add a
+// variant here, and add a match arm in main() with its default NetConfig.
+#[derive(Copy, Clone, Debug, ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Game{
+    Pente,
+}
+
 #[derive(Copy, Clone, Debug, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Mode{
@@ -46,6 +55,10 @@ enum Mode{
 #[derive(Parser, Debug, Serialize)]
 #[command(about = "Train Tard via MCTS self-play")]
 struct Args{
+    /// Which game to train
+    #[arg(long, value_enum, default_value_t = Game::Pente)]
+    game: Game,
+
     /// How self-play games are generated
     #[arg(long, value_enum, default_value_t = Mode::Batched)]
     mode: Mode,
@@ -84,15 +97,15 @@ struct Args{
     // A loaded model (--model/--resume) keeps the size saved with it; passing
     // a value that disagrees with it is an error.
 
-    /// Channels in the conv trunk [default: pente::default_net_config(), 128]
+    /// Channels in the conv trunk [default: the game's default, 64 for Pente]
     #[arg(long)]
     channels: Option<usize>,
 
-    /// Residual blocks in the trunk [default: pente::default_net_config(), 10]
+    /// Residual blocks in the trunk [default: the game's default, 6 for Pente]
     #[arg(long)]
     blocks: Option<usize>,
 
-    /// Hidden units in the value head [default: pente::default_net_config(), 128]
+    /// Hidden units in the value head [default: the game's default, 64 for Pente]
     #[arg(long)]
     value_hidden: Option<usize>,
 
@@ -171,10 +184,15 @@ fn main(){
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .init();
-    train_tard(&args);
+    match args.game{
+        Game::Pente => train_tard::<PenteState>(&args, pente::default_net_config()),
+    }
 }
 
-fn train_tard(args: &Args){
+// Trains a model for game G. `default_net` sizes a fresh network unless
+// overridden by --channels/--blocks/--value-hidden.
+fn train_tard<G: GameState>(args: &Args, default_net: NetConfig){
+    info!("Game: {}", G::NAME);
     ///// Configs ////////////
     let n_training_steps_per_iter = args.steps_per_iter;
     let batch_size = args.batch_size;
@@ -183,7 +201,7 @@ fn train_tard(args: &Args){
     let train_mem_capacity: usize = args.buffer_iters * n_elements_per_train;
     let dirchlet_hyper_params = DirichletHParams{
         epsilon: args.dirichlet_epsilon,
-        alpha: args.dirichlet_alpha.unwrap_or(20.0 / PenteState::ACTN_SPC_SIZE as f32),
+        alpha: args.dirichlet_alpha.unwrap_or(20.0 / G::ACTN_SPC_SIZE as f32),
     };
     let max_learning_rate = args.max_lr;
     let min_learning_rate = args.min_lr;
@@ -204,7 +222,7 @@ fn train_tard(args: &Args){
         });
         info!("Resuming from checkpoint {} at step {}/{}", ckpt.display(), train_step_cnt, n_training_steps);
         let model_path = ckpt.join("model.bpk");
-        let loaded = load_model::<PenteState>(&model_path, &device).unwrap_or_else(|e|{
+        let loaded = load_model::<G>(&model_path, &device).unwrap_or_else(|e|{
             panic!("Failed to load model {}: {}", model_path.display(), e)
         });
         let optim_path = ckpt.join("optim.bpk");
@@ -219,13 +237,13 @@ fn train_tard(args: &Args){
         loaded
     }else if args.model.exists(){
         info!("Starting from weights {} at step 0", args.model.display());
-        load_model::<PenteState>(&args.model, &device).unwrap_or_else(|e|{
+        load_model::<G>(&args.model, &device).unwrap_or_else(|e|{
             panic!("Failed to load model {}: {}", args.model.display(), e)
         })
     }else{
         info!("No model at {}, creating fresh instance", args.model.display());
-        let net = args.net_config(pente::default_net_config());
-        (Tard::for_game::<PenteState>(&net, &device), net)
+        let net = args.net_config(default_net);
+        (Tard::for_game::<G>(&net, &device), net)
     };
     // A loaded model's saved size wins; flags may only restate it.
     let requested = args.net_config(net);
@@ -242,7 +260,7 @@ fn train_tard(args: &Args){
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
 
     info!("Self-play mode: {:?}", args.mode);
-    let mut source: Box<dyn SelfPlaySource<PenteState>> = match args.mode{
+    let mut source: Box<dyn SelfPlaySource<G>> = match args.mode{
         Mode::Single => Box::new(SingleThreaded::new(
             &tard, args.rollouts, dirchlet_hyper_params, args.temp_moves)),
         Mode::Batched => Box::new(WorkerPool::new(
@@ -302,7 +320,7 @@ fn train_tard(args: &Args){
                 break;
             }
             let trn_samples = trn_buf.sample(batch_size);
-            let t_loss = compute_loss::<PenteState>(&tard, &trn_samples);
+            let t_loss = compute_loss::<G>(&tard, &trn_samples);
             debug!("t_loss: {}", t_loss);
             sum_loss = sum_loss + t_loss.loss.clone().detach();
             sum_ce = sum_ce + t_loss.cross_entropy_loss.clone().detach();
@@ -326,7 +344,7 @@ fn train_tard(args: &Args){
 
         let ckpt = om.checkpoint_dir(train_step_cnt).expect("Unable to create checkpoint directory");
         info!("Saving checkpoint {}", ckpt.display());
-        save_model(&tard, &net, &ckpt.join("model.bpk"))
+        save_model::<G>(&tard, &net, &ckpt.join("model.bpk"))
             .unwrap_or_else(|e| panic!("Unable to save model: {}", e));
         opt.save(ckpt.join("optim.bpk"))
            .expect("Unable to save optimizer state");

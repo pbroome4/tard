@@ -10,6 +10,8 @@ use burn::store::ModuleRecord;
 use burn::module::Module;
 
 use crate::gamestate::GameState;
+use serde::{Deserialize, Serialize};
+
 use crate::tard::{NetConfig, Tard, TrainingElement};
 use crate::engine::SelfPlayElement;
 
@@ -234,45 +236,69 @@ pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
 }
 
 
-/// Path of the NetConfig sidecar for a model file:
-/// `.../model.bpk` -> `.../model.net.json`.
-pub fn net_config_path(model: &Path) -> PathBuf{
+/// What a model file's weights are shaped for, saved next to it as
+/// `<name>.net.json`: the game (input/output layers) and the NetConfig
+/// (trunk and value head). Serialized flat, e.g.
+/// `{"game": "pente", "channels": 128, "blocks": 10, "value_hidden": 128}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelMeta{
+    // None for sidecars written before the game was recorded; those were
+    // all Pente, the only game at the time.
+    #[serde(default)]
+    pub game: Option<String>,
+    #[serde(flatten)]
+    pub net: NetConfig,
+}
+
+/// Path of the sidecar for a model file: `.../model.bpk` -> `.../model.net.json`.
+pub fn model_meta_path(model: &Path) -> PathBuf{
     return model.with_extension("net.json");
 }
 
-/// Writes `net` as the sidecar for `model`.
-pub fn write_net_config(model: &Path, net: &NetConfig) -> Result<(), Box<dyn Error>>{
-    fs::write(net_config_path(model), serde_json::to_string_pretty(net)?)?;
+/// Writes `meta` as the sidecar for `model`.
+pub fn write_model_meta(model: &Path, meta: &ModelMeta) -> Result<(), Box<dyn Error>>{
+    fs::write(model_meta_path(model), serde_json::to_string_pretty(meta)?)?;
     return Ok(());
 }
 
-/// Reads the NetConfig saved next to `model`. Model files from before
-/// NetConfig existed have no sidecar; they all used NetConfig::default().
-pub fn read_net_config(model: &Path) -> Result<NetConfig, Box<dyn Error>>{
-    let p = net_config_path(model);
+/// Reads the sidecar saved next to `model`. Model files from before
+/// sidecars existed have none; they are all default-sized Pente models
+/// (reported as game None, which any game accepts; see check_game).
+pub fn read_model_meta(model: &Path) -> Result<ModelMeta, Box<dyn Error>>{
+    let p = model_meta_path(model);
     if !p.exists(){
         info!("No {} found; assuming the default network size", p.display());
-        return Ok(NetConfig::default());
+        return Ok(ModelMeta{ game: None, net: NetConfig::default() });
     }
     return Ok(serde_json::from_str(&fs::read_to_string(&p)?)?);
 }
 
-/// Saves the weights to `path` and the network size next to them.
-pub fn save_model(tard: &Tard, net: &NetConfig, path: &Path) -> Result<(), Box<dyn Error>>{
+/// Errors if `meta` records a game other than G.
+pub fn check_game<G: GameState>(meta: &ModelMeta) -> Result<(), Box<dyn Error>>{
+    match &meta.game{
+        Some(game) if game != G::NAME =>
+            Err(format!("model was trained for game '{}', not '{}'", game, G::NAME).into()),
+        _ => Ok(()),
+    }
+}
+
+/// Saves the weights to `path` and their game and network size next to them.
+pub fn save_model<G: GameState>(tard: &Tard, net: &NetConfig, path: &Path) -> Result<(), Box<dyn Error>>{
     tard.clone().save_file(path)?;
-    write_net_config(path, net)?;
+    write_model_meta(path, &ModelMeta{ game: Some(G::NAME.to_string()), net: *net })?;
     return Ok(());
 }
 
 /// Loads a model saved by save_model (or an older model file without a
 /// sidecar) into a network for game G. Returns the network and its size.
 pub fn load_model<G: GameState>(p: &Path, device: &Device) -> Result<(Tard, NetConfig), Box<dyn Error>>{
-    let net = read_net_config(p)?;
-    info!("Loading model record: {} ({:?})", p.display(), net);
+    let meta = read_model_meta(p)?;
+    check_game::<G>(&meta)?;
+    info!("Loading model record: {} ({:?})", p.display(), meta);
     let record = ModuleRecord::load(p)?;
-    let tard = Tard::for_game::<G>(&net, device).load_record(record);
+    let tard = Tard::for_game::<G>(&meta.net, device).load_record(record);
     info!("Tard model loaded");
-    return Ok((tard, net));
+    return Ok((tard, meta.net));
 }
 
 #[cfg(test)]
@@ -386,23 +412,40 @@ mod tests{
     }
 
     #[test]
-    fn net_config_sidecar_sits_next_to_the_model_file(){
-        assert_eq!(net_config_path(Path::new("ckpt/step_000512/model.bpk")),
+    fn model_meta_sidecar_sits_next_to_the_model_file(){
+        assert_eq!(model_meta_path(Path::new("ckpt/step_000512/model.bpk")),
                    PathBuf::from("ckpt/step_000512/model.net.json"));
-        assert_eq!(net_config_path(Path::new("model")), PathBuf::from("model.net.json"));
+        assert_eq!(model_meta_path(Path::new("model")), PathBuf::from("model.net.json"));
     }
 
     #[test]
-    fn net_config_roundtrips_and_defaults_when_missing(){
+    fn model_meta_roundtrips_and_defaults_when_missing(){
         let d = scratch_dir("netcfg");
         let model = d.join("model.bpk");
-        assert_eq!(read_net_config(&model).unwrap(), NetConfig::default());
-        let small = NetConfig{ channels: 64, blocks: 6, value_hidden: 32 };
-        write_net_config(&model, &small).unwrap();
-        assert_eq!(read_net_config(&model).unwrap(), small);
-        fs::write(net_config_path(&model), "not json").unwrap();
-        assert!(read_net_config(&model).is_err(), "a corrupt sidecar must not silently fall back");
+        assert_eq!(read_model_meta(&model).unwrap(), ModelMeta{ game: None, net: NetConfig::default() });
+        let meta = ModelMeta{
+            game: Some("pente".to_string()),
+            net: NetConfig{ channels: 64, blocks: 6, value_hidden: 32 },
+        };
+        write_model_meta(&model, &meta).unwrap();
+        assert_eq!(read_model_meta(&model).unwrap(), meta);
+        // The format is flat, so sidecars written before the game was
+        // recorded still parse.
+        fs::write(model_meta_path(&model), r#"{"channels": 32, "blocks": 2, "value_hidden": 16}"#).unwrap();
+        assert_eq!(read_model_meta(&model).unwrap(),
+                   ModelMeta{ game: None, net: NetConfig{ channels: 32, blocks: 2, value_hidden: 16 } });
+        fs::write(model_meta_path(&model), "not json").unwrap();
+        assert!(read_model_meta(&model).is_err(), "a corrupt sidecar must not silently fall back");
         fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn check_game_rejects_a_model_for_another_game(){
+        let meta = |game: Option<&str>| ModelMeta{ game: game.map(String::from), net: NetConfig::default() };
+        assert!(check_game::<PenteState>(&meta(Some("pente"))).is_ok());
+        assert!(check_game::<PenteState>(&meta(None)).is_ok(), "older sidecars have no game");
+        let err = check_game::<PenteState>(&meta(Some("connect4"))).unwrap_err();
+        assert!(err.to_string().contains("connect4"));
     }
 
     #[test]

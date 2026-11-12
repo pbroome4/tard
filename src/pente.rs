@@ -34,35 +34,11 @@ pub struct PenteState{
     status_: Status,
 }
 
-/// Default network size for a fresh Pente model (see net_config_for_board).
+/// Default network size for a fresh Pente model. Chosen somewhat
+/// arbitrarily, not tuned: it's smaller than the old 128/10/128 because that
+/// seemed oversized for a 9x9 board.
 pub fn default_net_config() -> NetConfig{
-    return net_config_for_board(ROWS, COLS);
-}
-
-/// A starting-point network size for Pente on a `rows` x `cols` board.
-///
-/// NOT a tuned or authoritative choice, and only meant for Pente: other
-/// games should pick their own sizes. The 128-channel, 10-block size used
-/// for this 9x9 board was picked fairly arbitrarily, not found by comparing
-/// sizes. This formula reproduces it and scales it with the board using
-/// rough rules of thumb, e.g. for standard 19x19 Pente:
-///
-/// - Depth grows with board size: blocks = longest side + 1. Each block is
-///   two 3x3 convs, so this stays well above the ~side/2 convs a square
-///   needs to "see" across the board (19x19 gives 20 blocks, AlphaZero's
-///   Go depth).
-/// - Width grows with board size: channels ~= 14 * sqrt(cells), rounded to
-///   a multiple of 32 and clamped to 64..=256 (9x9 gives 128, 19x19 gives
-///   256, AlphaZero's Go width).
-/// - The value head's hidden layer matches the trunk width.
-///
-/// Per-evaluation cost scales roughly with cells * channels^2 * blocks.
-/// To actually choose a size, train candidates and have them play each
-/// other.
-fn net_config_for_board(rows: usize, cols: usize) -> NetConfig{
-    let cells = (rows * cols) as f64;
-    let channels = (((14.0 * cells.sqrt()) / 32.0).round() as usize * 32).clamp(64, 256);
-    return NetConfig{ channels, blocks: rows.max(cols) + 1, value_hidden: channels };
+    return NetConfig{ channels: 64, blocks: 6, value_hidden: 64 };
 }
 
 impl Default for PenteState{
@@ -72,6 +48,7 @@ impl Default for PenteState{
 }
 
 impl GameState for PenteState{
+    const NAME: &'static str = "pente";
     const ACTN_SPC_SIZE: usize = ROWS * COLS;
     const N_CHAN: usize = 4;
     const ROWS: usize = ROWS;
@@ -342,14 +319,11 @@ mod tests{
     }
 
     #[test]
-    fn default_net_config_keeps_the_original_size_and_scales_with_the_board(){
-        // The 9x9 board keeps the size every existing model was trained with.
-        assert_eq!(default_net_config(), NetConfig::default());
-        let net = |channels, blocks| NetConfig{ channels, blocks, value_hidden: channels };
-        assert_eq!(net_config_for_board(19, 19), net(256, 20)); // standard Pente board
-        assert_eq!(net_config_for_board(13, 13), net(192, 14));
-        assert_eq!(net_config_for_board(5, 5), net(64, 6));     // width clamped low
-        assert_eq!(net_config_for_board(25, 25), net(256, 26)); // width clamped high
+    fn default_net_config_is_smaller_than_the_legacy_size(){
+        assert_eq!(default_net_config(), NetConfig{ channels: 64, blocks: 6, value_hidden: 64 });
+        // Fresh models now differ from NetConfig::default(), which must stay
+        // at the size older sidecar-less model files were trained with.
+        assert_eq!(NetConfig::default(), NetConfig{ channels: 128, blocks: 10, value_hidden: 128 });
     }
 
     #[test]
