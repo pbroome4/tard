@@ -80,6 +80,7 @@ impl GameState for PenteState{
     
     fn apply_action(&mut self, action: usize){
         trace!("Applying action {}", action);
+        assert!(!self.is_terminal(), "apply_action({}) called on a finished game\n{}", action, self);
         assert!(self.is_legal_action(action), "Illegal action {} for board \n{}", action, self);
         let (row,col) = action_2_coord(action);
         if self.is_black_{
@@ -102,7 +103,10 @@ impl GameState for PenteState{
     }
     
 
+    // In Pente the player who just moved is the one who can win, so this is
+    // never +1: it's -1 (side to move lost) or 0 (draw).
     fn get_terminal_value(&self) -> i32{
+        assert!(self.is_terminal(), "get_terminal_value called on a non-terminal state\n{}", self);
         if self.is_terminal_ == Piece::Sentinel{
             return 0;
         }
@@ -139,9 +143,10 @@ impl PenteState{
         return false;
     }
 
+    // No action is legal once the game is over.
     pub fn is_legal_action(&self, action: usize) -> bool{
         let (row, col) = action_2_coord(action);
-        return row < PenteState::ROWS && col < PenteState::COLS && self.board_[row][col] == Piece::Empty;
+        return !self.is_terminal() && row < PenteState::ROWS && col < PenteState::COLS && self.board_[row][col] == Piece::Empty;
     }
     
     fn legal_actions(&self) -> Vec<usize>{

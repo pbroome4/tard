@@ -20,12 +20,13 @@ pub trait GameState: Default + Clone + fmt::Display + Debug + Send + 'static{
     //fn get_random_action(&self) -> Action;
 
     // Apply an action. action MUST be a legal action.
-    // Calling with an illegal action is UB.
+    // Implementations should panic on an illegal action or a finished game.
     fn apply_action(&mut self, action: Action);
 
     // Is the game over
     fn is_terminal(&self) -> bool;
 
+    // Must only be called on a terminal state.
     // Returns:
     //  +1 on Current player win
     //   0 on Draw

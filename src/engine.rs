@@ -163,7 +163,16 @@ fn mcts_tree_posterior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -
         let action = child.action.unwrap();
         p[action] = (child.visits as f32) / (node.visits as f32);
     }
-    let p_sum: f32 = p.iter().sum();
+    let mut p_sum: f32 = p.iter().sum();
+    if p_sum == 0.0{
+        // No child has been visited yet (only 1 simulation ran):
+        // fall back to the (noised) priors.
+        for child_id in tree.children(node_id){
+            let child = tree.get(child_id).unwrap();
+            p[child.action.unwrap()] = child.prior;
+        }
+        p_sum = p.iter().sum();
+    }
     for e in p.iter_mut(){
         *e = (*e / p_sum).ln();
     }
@@ -290,7 +299,7 @@ impl MctsTree{
     // Returns probabilistic upper confidence bound applied to trees (PUCT)
     // and returns best option.
     // Only call on node_id that have been expanded.
-    // Calling on node_id that are not expanded is UB.
+    // Panics if node_id has no children.
     fn puct_select(&self, node_id:NodeId) -> (NodeId, Action){
         let mut best_child_id = usize::MAX;
         let mut best_score = f32::NAN;
@@ -322,7 +331,8 @@ impl MctsTree{
     }
     
 
-    // Only call on non-terminal states. Caling on terminal state is UB.
+    // Must not be called on a terminal state (debug-asserted; in release it
+    // would evaluate a finished game and create children for it).
     // Returns the value of the node
     fn expand <G:GameState>(
         &mut self,
@@ -334,12 +344,14 @@ impl MctsTree{
         debug_assert_eq!(state.is_terminal(), false);
         trace!("Expanding node {}", node_id);
         let (mut p, v) = eval.evaluate(state);
+        let legal_mask = state.legal_actions_mask();
         if node_id == 0{
             trace!("Adding dirichlet noise {} to root", dhp);
-            p = add_dirichlet_noise(p, &state.legal_actions_mask(), dhp);
+            p = add_dirichlet_noise(p, &legal_mask, dhp);
         }
         for action in 0..p.len(){
-            if p[action] > 0.0{   // Only add legal actions.
+            // Every legal action gets a child, even if its prior underflowed to 0.
+            if legal_mask[action] != 0.0{
                 self.add_child(action, node_id, p[action]);
             }
         }

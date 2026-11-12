@@ -19,6 +19,10 @@ struct Args{
     /// Model file to play against
     #[arg(long, default_value = "model.bpk")]
     model: PathBuf,
+
+    /// MCTS rollouts per computer move
+    #[arg(long, default_value_t = 3000)]
+    rollouts: usize,
 }
 
 fn main(){
@@ -40,43 +44,54 @@ fn main(){
     let mut eval = TardEvaluator::new(&tard);
 
     let mut g = PenteState::new();
-    info!("Is human first to play? (y/n)");
-    let mut is_player_move = read_yn();
-    info!("\n{}", g);
+    print!("Is human first to play? (y/n) ");
+    io::stdout().flush().unwrap();
+    let Some(mut is_player_move) = read_yn() else{
+        println!("\nInput closed, quitting");
+        return;
+    };
+    println!("\n{}", g);
     loop{
         if is_player_move{
             let player: &str = g.active_plyr_str();
-            info!("Enter move for {player} as row, col: ");
+            print!("Enter move for {player} as row, col: ");
             io::stdout().flush().unwrap();
-            let Ok((row, col)) = read_move() else{
-                info!("Failed to read move");
-                continue;
+            let (row, col) = match read_move(){
+                Ok(rc) => rc,
+                Err(ReadError::Invalid(_)) => {
+                    println!("Failed to read move");
+                    continue;
+                }
+                Err(ReadError::Eof) => {
+                    println!("\nInput closed, quitting");
+                    return;
+                }
             };
             if !g.play(row, col){
-                info!("Illegal Move");
+                println!("Illegal Move");
                 continue;
             }
             if g.is_terminal(){
                 break;
             }
             is_player_move = false;
-            info!("\n{}", g);
+            println!("\n{}", g);
         }
         if !is_player_move{
             let player: &str = g.active_plyr_str();
-            info!("Computer thinking of move for {player}");
-            let (action, val) = inference(&g, &mut eval, 3000);
+            println!("Computer thinking of move for {player}");
+            let (action, val) = inference(&g, &mut eval, args.rollouts);
             let (row, col) = action_2_coord(action);
-            g.play(row, col);
-            info!("Computer played (row, col): ({}, {})", row, col);
-            info!("Computer eval: {}", val);
+            assert!(g.play(row, col), "Engine chose an illegal move ({}, {})", row, col);
+            println!("Computer played (row, col): ({}, {})", row, col);
+            println!("Computer eval: {}", val);
             if g.is_terminal(){
                 break;
             }
             is_player_move = true;
-            info!("\n{}", g);
+            println!("\n{}", g);
         }
     }
-    info!("{}", g);
-    info!("Game Over!");
+    println!("{}", g);
+    println!("Game Over!");
 }

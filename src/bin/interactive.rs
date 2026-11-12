@@ -1,7 +1,7 @@
 
 use std::io::{self, Write}; // Bring the I/O traits into scope
 use std::str::FromStr;
-use tracing::{debug, info};
+use tracing::debug;
 use tracing::Level;
 use tracing_subscriber;
 use clap::Parser;
@@ -34,24 +34,26 @@ fn main(){
 
     let mut brd = PenteState::new();
     loop{
-        info!("\n{}", brd);
+        println!("\n{}", brd);
         //mcts(&brd, args.n);
         let player: &str = brd.active_plyr_str();
-        info!("Enter move for {player} as row, col: ");
+        print!("Enter move for {player} as row, col: ");
         io::stdout().flush().unwrap();
-        if let Ok((row, col)) = read_move() {
-            if brd.play(row, col){
-                if brd.is_terminal(){
+        match read_move(){
+            Ok((row, col)) => {
+                if !brd.play(row, col){
+                    println!("Illegal Move");
+                }else if brd.is_terminal(){
                     break;
                 }
-            }else{
-                info!("Illegal Move");
-                continue;
             }
-        }else{
-            info!("Failed to read move")
+            Err(ReadError::Invalid(_)) => println!("Failed to read move"),
+            Err(ReadError::Eof) => {
+                println!("\nInput closed, quitting");
+                return;
+            }
         }
     }
-    info!("{}", brd);
-    info!("Game Over!");
+    println!("{}", brd);
+    println!("Game Over!");
 }

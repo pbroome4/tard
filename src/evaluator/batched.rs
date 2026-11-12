@@ -8,7 +8,7 @@
 // server thread, so every client always uses the server's current model.
 
 use std::collections::VecDeque;
-use std::thread;
+use std::thread::{self, JoinHandle};
 use burn::tensor::{Device, Tensor, TensorData};
 use burn::module::Module;
 use crossbeam::channel::{Receiver, RecvError, Sender, TryRecvError};
@@ -32,8 +32,10 @@ impl <G:GameState> Evaluator<G> for BatchedClient<G>{
             g: g.clone(),
             resp_chan: s
         };
-        self.s_eval.send(req).unwrap();
-        let resp = r.recv().unwrap();
+        self.s_eval.send(req)
+            .expect("Batched eval server is gone (it likely panicked; see its error)");
+        let resp = r.recv()
+            .expect("Batched eval server dropped the request (it likely panicked; see its error)");
         return (resp.p, resp.v);
     }
 }
@@ -42,18 +44,23 @@ impl <G:GameState> Evaluator<G> for BatchedClient<G>{
 pub struct BatchedBackend<G>{
     s_update: Sender<Tard>,
     s_eval:  Sender<EvalRequest<G>>,
+    server: Option<JoinHandle<()>>,
 }
 
 impl <G:GameState> BatchedBackend<G>{
     pub fn new(t: &Tard, max_batch_size: usize) -> Self{
         let (s_u, r_u) = crossbeam::channel::unbounded();
         let (s_e, r_e) = crossbeam::channel::unbounded();
-        thread::spawn(move ||{
-            run_server::<G>(r_u, r_e, max_batch_size)
-        });
+        let server = thread::Builder::new()
+            .name("batched-eval-server".to_string())
+            .spawn(move ||{
+                run_server::<G>(r_u, r_e, max_batch_size)
+            })
+            .expect("Failed to spawn batched eval server thread");
         let mut slf = Self {
             s_update: s_u,
             s_eval: s_e,
+            server: Some(server),
         };
         EvalBackend::<G>::update(&mut slf, t);
         return slf;
@@ -69,7 +76,15 @@ impl <G:GameState> EvalBackend<G> for BatchedBackend<G>{
 
     fn update(&mut self, t: &Tard){
         info!("Sending batched eval server updated tard");
-        self.s_update.send(t.valid()).unwrap();
+        if self.s_update.send(t.valid()).is_err(){
+            // The server only drops its receiver by exiting; surface why.
+            let reason = match self.server.take().map(|h| h.join()){
+                Some(Err(payload)) => format!("panicked: {}", panic_message(&payload)),
+                Some(Ok(())) => "exited".to_string(),
+                None => "already reported".to_string(),
+            };
+            panic!("Batched eval server is gone ({})", reason);
+        }
     }
 }
 

@@ -11,12 +11,13 @@
 
 use std::thread::{self, JoinHandle};
 use crossbeam::channel::{Receiver, Sender};
-use tracing::{debug, info};
+use tracing::{debug, error, info, warn};
 
 use crate::engine::{run_self_play, DirichletHParams, SelfPlayElement};
 use crate::evaluator::{Evaluator, EvalBackend, TardEvaluator};
 use crate::gamestate::GameState;
 use crate::tard::Tard;
+use crate::utils::panic_message;
 
 
 pub trait SelfPlaySource<G: GameState>{
@@ -89,11 +90,54 @@ impl <G: GameState, B: EvalBackend<G>> WorkerPool<G, B>{
 
 impl <G: GameState, B: EvalBackend<G>> SelfPlaySource<G> for WorkerPool<G, B>{
     fn next_game(&mut self) -> Option<Vec<SelfPlayElement<G>>>{
-        return self.r_games.as_ref()?.recv().ok();
+        // Workers only exit on their own by panicking, so report any that have.
+        self.reap_finished_workers();
+        match self.r_games.as_ref()?.recv(){
+            Ok(game) => Some(game),
+            Err(_) => {
+                // Every worker has dropped its sender, i.e. they all exited.
+                error!("All self-play workers have exited");
+                self.join_all_workers();
+                None
+            }
+        }
     }
 
     fn update_model(&mut self, t: &Tard){
         self.backend.update(t);
+    }
+}
+
+impl <G: GameState, B: EvalBackend<G>> WorkerPool<G, B>{
+    // Joins workers that have already exited and logs any panics.
+    fn reap_finished_workers(&mut self){
+        let before = self.handles.len();
+        let mut i = 0;
+        while i < self.handles.len(){
+            if self.handles[i].is_finished(){
+                join_and_report(self.handles.swap_remove(i));
+            }else{
+                i += 1;
+            }
+        }
+        if self.handles.len() < before{
+            warn!("{} self-play worker(s) exited; {} still running",
+                  before - self.handles.len(), self.handles.len());
+        }
+    }
+
+    fn join_all_workers(&mut self){
+        for h in self.handles.drain(..){
+            join_and_report(h);
+        }
+    }
+}
+
+// Joins a thread, logging its panic message if it panicked.
+fn join_and_report(h: JoinHandle<()>){
+    let name = h.thread().name().unwrap_or("<unnamed>").to_string();
+    if let Err(payload) = h.join(){
+        error!("Thread {} panicked: {}", name, panic_message(&payload));
     }
 }
 
@@ -103,9 +147,7 @@ impl <G: GameState, B: EvalBackend<G>> Drop for WorkerPool<G, B>{
     fn drop(&mut self){
         info!("Shutting down worker pool");
         drop(self.r_games.take());
-        for h in self.handles.drain(..){
-            let _ = h.join();
-        }
+        self.join_all_workers();
         info!("Worker pool shut down");
     }
 }
@@ -119,7 +161,7 @@ fn start_worker<G: GameState>(
     temp_moves: usize) -> JoinHandle<()>
 {
     debug!("Spawning worker thread #{}", thread_id);
-    thread::spawn(move ||{
+    thread::Builder::new().name(format!("selfplay-{}", thread_id)).spawn(move ||{
         let mut self_play_count = 0;
         loop{
             let game_data = run_self_play::<G>(&mut eval, n_rollouts, &dhp, temp_moves);
@@ -131,5 +173,5 @@ fn start_worker<G: GameState>(
             }
             self_play_count += 1;
         }
-    })
+    }).expect("Failed to spawn self-play worker thread")
 }

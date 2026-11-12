@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
-use tracing::{trace, debug, info};
+use tracing::{trace, debug, info, warn};
+use std::any::Any;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -96,28 +97,51 @@ pub fn parse_coord(s: &str) -> Result<(usize, usize), String> {
 }
 
 
-pub fn read_move() -> Result<(usize, usize), String>{
+#[derive(Debug)]
+pub enum ReadError{
+    Eof,             // stdin closed (or unreadable); callers should stop prompting
+    Invalid(String), // line read but couldn't be parsed
+}
+
+// Reads one line from stdin. None on EOF or read error.
+fn read_line() -> Option<String>{
     let mut input_buffer = String::new();
-    io::stdin().read_line(&mut input_buffer).unwrap();
-    match parse_coord(&input_buffer){
-        Ok((r,c)) => {
-            return Ok((r,c));
-        }
-        Err(s) =>{
-            return Err(s);
-        } 
+    match io::stdin().read_line(&mut input_buffer){
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(input_buffer),
     }
 }
 
-pub fn read_yn() -> bool{
-    let mut input_buffer = String::new();
-    io::stdin().read_line(&mut input_buffer).unwrap();
-    if input_buffer.contains("y"){
-        return true;
+pub fn read_move() -> Result<(usize, usize), ReadError>{
+    let line = read_line().ok_or(ReadError::Eof)?;
+    return parse_coord(&line).map_err(ReadError::Invalid);
+}
+
+// Reads a y/n answer, re-prompting on anything else. None on EOF.
+pub fn read_yn() -> Option<bool>{
+    loop{
+        let line = read_line()?;
+        match line.trim().to_lowercase().as_str(){
+            "y" | "yes" => return Some(true),
+            "n" | "no" => return Some(false),
+            _ => {
+                print!("Please answer y or n: ");
+                let _ = io::stdout().flush();
+            }
+        }
     }
-    return false;
-    
-} 
+}
+
+// Best-effort text of a panic payload (from JoinHandle::join or catch_unwind).
+pub fn panic_message(payload: &Box<dyn Any + Send>) -> &str{
+    if let Some(s) = payload.downcast_ref::<&str>(){
+        return s;
+    }
+    if let Some(s) = payload.downcast_ref::<String>(){
+        return s;
+    }
+    return "<non-string panic payload>";
+}
 
 
 pub fn legalize_policy(mut p: Vec<f32>, g: &impl GameState) -> Vec<f32>{
@@ -126,6 +150,14 @@ pub fn legalize_policy(mut p: Vec<f32>, g: &impl GameState) -> Vec<f32>{
         if legal_mask[i] == 0.0{
             p[i] = 0.0;
         }
+    }
+    let sum: f32 = p.iter().sum();
+    if !(sum > 0.0 && sum.is_finite()){
+        // All legal moves got zero (underflow) or non-finite (NaN/inf)
+        // probability. Fall back to uniform over legal moves rather than
+        // producing NaNs.
+        warn!("Policy has no usable mass over legal moves (sum = {}); using uniform", sum);
+        p = legal_mask;
     }
     return normalize(p);
 }
