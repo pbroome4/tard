@@ -1,15 +1,16 @@
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use std::any::Any;
+use std::error::Error;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 use burn::tensor::Device;
-use burn::store::{ModuleRecord, RecordError};
+use burn::store::ModuleRecord;
 use burn::module::Module;
 
 use crate::gamestate::GameState;
-use crate::tard::{Tard, TrainingElement};
+use crate::tard::{NetConfig, Tard, TrainingElement};
 use crate::engine::SelfPlayElement;
 
 /// Layout of one training run:
@@ -233,15 +234,45 @@ pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
 }
 
 
-// Loads a checkpoint into a network sized for game G.
-pub fn load_model<G: GameState>(p: &Path, device: &Device) -> Result<Tard, RecordError>{
-    let mut tard = Tard::for_game::<G>(device);
-    info!("Loading model record: {}", p.display());
+/// Path of the NetConfig sidecar for a model file:
+/// `.../model.bpk` -> `.../model.net.json`.
+pub fn net_config_path(model: &Path) -> PathBuf{
+    return model.with_extension("net.json");
+}
+
+/// Writes `net` as the sidecar for `model`.
+pub fn write_net_config(model: &Path, net: &NetConfig) -> Result<(), Box<dyn Error>>{
+    fs::write(net_config_path(model), serde_json::to_string_pretty(net)?)?;
+    return Ok(());
+}
+
+/// Reads the NetConfig saved next to `model`. Model files from before
+/// NetConfig existed have no sidecar; they all used NetConfig::default().
+pub fn read_net_config(model: &Path) -> Result<NetConfig, Box<dyn Error>>{
+    let p = net_config_path(model);
+    if !p.exists(){
+        info!("No {} found; assuming the default network size", p.display());
+        return Ok(NetConfig::default());
+    }
+    return Ok(serde_json::from_str(&fs::read_to_string(&p)?)?);
+}
+
+/// Saves the weights to `path` and the network size next to them.
+pub fn save_model(tard: &Tard, net: &NetConfig, path: &Path) -> Result<(), Box<dyn Error>>{
+    tard.clone().save_file(path)?;
+    write_net_config(path, net)?;
+    return Ok(());
+}
+
+/// Loads a model saved by save_model (or an older model file without a
+/// sidecar) into a network for game G. Returns the network and its size.
+pub fn load_model<G: GameState>(p: &Path, device: &Device) -> Result<(Tard, NetConfig), Box<dyn Error>>{
+    let net = read_net_config(p)?;
+    info!("Loading model record: {} ({:?})", p.display(), net);
     let record = ModuleRecord::load(p)?;
-    info!("Loading record into tard");
-    tard = tard.load_record(record);
+    let tard = Tard::for_game::<G>(&net, device).load_record(record);
     info!("Tard model loaded");
-    return Ok(tard);
+    return Ok((tard, net));
 }
 
 #[cfg(test)]
@@ -352,6 +383,26 @@ mod tests{
         let om2 = OutputManager::new(&root, "{}").unwrap();
         assert_ne!(om.run_d, om2.run_d);
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn net_config_sidecar_sits_next_to_the_model_file(){
+        assert_eq!(net_config_path(Path::new("ckpt/step_000512/model.bpk")),
+                   PathBuf::from("ckpt/step_000512/model.net.json"));
+        assert_eq!(net_config_path(Path::new("model")), PathBuf::from("model.net.json"));
+    }
+
+    #[test]
+    fn net_config_roundtrips_and_defaults_when_missing(){
+        let d = scratch_dir("netcfg");
+        let model = d.join("model.bpk");
+        assert_eq!(read_net_config(&model).unwrap(), NetConfig::default());
+        let small = NetConfig{ channels: 64, blocks: 6, value_hidden: 32 };
+        write_net_config(&model, &small).unwrap();
+        assert_eq!(read_net_config(&model).unwrap(), small);
+        fs::write(net_config_path(&model), "not json").unwrap();
+        assert!(read_net_config(&model).is_err(), "a corrupt sidecar must not silently fall back");
+        fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

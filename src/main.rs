@@ -1,6 +1,5 @@
 use burn::lr_scheduler::cosine::CosineAnnealingLrSchedulerConfig;
 use burn::lr_scheduler::module_lr_scheduler::ModuleLearningRate;
-use burn::module::Module;
 use clap::{Parser, ValueEnum};
 use tracing::{debug, info, warn};
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
@@ -11,7 +10,7 @@ use std::time::Instant;
 use serde::Serialize;
 
 use pentard::gamestate::GameState;
-use pentard::pente::PenteState;
+use pentard::pente::{self, PenteState};
 use pentard::engine::*;
 use pentard::evaluator::{BatchedBackend, ReplicatedBackend};
 use pentard::selfplay::{SelfPlaySource, SingleThreaded, WorkerPool};
@@ -81,6 +80,22 @@ struct Args{
     #[arg(long, conflicts_with = "model")]
     resume: Option<PathBuf>,
 
+    // ---- Network size (only for a freshly initialized network) ----
+    // A loaded model (--model/--resume) keeps the size saved with it; passing
+    // a value that disagrees with it is an error.
+
+    /// Channels in the conv trunk [default: pente::default_net_config(), 128]
+    #[arg(long)]
+    channels: Option<usize>,
+
+    /// Residual blocks in the trunk [default: pente::default_net_config(), 10]
+    #[arg(long)]
+    blocks: Option<usize>,
+
+    /// Hidden units in the value head [default: pente::default_net_config(), 128]
+    #[arg(long)]
+    value_hidden: Option<usize>,
+
     /// Root directory for outputs. Each run writes to a new
     /// `<output-dir>/run_<unix_seconds>/` subdirectory.
     #[arg(long, default_value = "output")]
@@ -136,6 +151,18 @@ struct Args{
 }
 
 
+impl Args{
+    // `base` with any network-size flags applied on top.
+    fn net_config(&self, base: NetConfig) -> NetConfig{
+        return NetConfig{
+            channels: self.channels.unwrap_or(base.channels),
+            blocks: self.blocks.unwrap_or(base.blocks),
+            value_hidden: self.value_hidden.unwrap_or(base.value_hidden),
+        };
+    }
+}
+
+
 fn main(){
     let args = Args::parse();
     let mut filter = EnvFilter::from_default_env()
@@ -171,14 +198,14 @@ fn train_tard(args: &Args){
         .init()
         .unwrap();
     let mut train_step_cnt = 0;
-    let mut tard = if let Some(ckpt) = &args.resume{
+    let (mut tard, net) = if let Some(ckpt) = &args.resume{
         train_step_cnt = step_from_checkpoint_dir(ckpt).unwrap_or_else(||{
             panic!("--resume {} is not a checkpoint directory named step_<N>", ckpt.display())
         });
         info!("Resuming from checkpoint {} at step {}/{}", ckpt.display(), train_step_cnt, n_training_steps);
         let model_path = ckpt.join("model.bpk");
-        let tard = load_model::<PenteState>(&model_path, &device).unwrap_or_else(|e|{
-            panic!("Failed to load model {}: {:?}", model_path.display(), e)
+        let loaded = load_model::<PenteState>(&model_path, &device).unwrap_or_else(|e|{
+            panic!("Failed to load model {}: {}", model_path.display(), e)
         });
         let optim_path = ckpt.join("optim.bpk");
         opt = opt.load(&optim_path).unwrap_or_else(|e|{
@@ -189,16 +216,24 @@ fn train_tard(args: &Args){
             lr.step();
         }
         info!("Replay buffer is not persisted and will refill from self-play.");
-        tard
+        loaded
     }else if args.model.exists(){
         info!("Starting from weights {} at step 0", args.model.display());
         load_model::<PenteState>(&args.model, &device).unwrap_or_else(|e|{
-            panic!("Failed to load model {}: {:?}", args.model.display(), e)
+            panic!("Failed to load model {}: {}", args.model.display(), e)
         })
     }else{
         info!("No model at {}, creating fresh instance", args.model.display());
-        Tard::for_game::<PenteState>(&device)
+        let net = args.net_config(pente::default_net_config());
+        (Tard::for_game::<PenteState>(&net, &device), net)
     };
+    // A loaded model's saved size wins; flags may only restate it.
+    let requested = args.net_config(net);
+    if requested != net{
+        panic!("Network-size flags ask for {:?}, but the loaded model is {:?}. \
+                --channels/--blocks/--value-hidden only apply to a fresh network.", requested, net);
+    }
+    info!("Network: {:?}", net);
     debug!("{}", tard);
     // Created only after loading succeeds, so a bad --resume/--model
     // doesn't leave an empty run directory behind.
@@ -291,8 +326,8 @@ fn train_tard(args: &Args){
 
         let ckpt = om.checkpoint_dir(train_step_cnt).expect("Unable to create checkpoint directory");
         info!("Saving checkpoint {}", ckpt.display());
-        tard.clone().save_file(ckpt.join("model.bpk"))
-                    .expect("Unable to save model");
+        save_model(&tard, &net, &ckpt.join("model.bpk"))
+            .unwrap_or_else(|e| panic!("Unable to save model: {}", e));
         opt.save(ckpt.join("optim.bpk"))
            .expect("Unable to save optimizer state");
         let iter_time = iter_start.elapsed();

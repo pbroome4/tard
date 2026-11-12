@@ -23,7 +23,7 @@ cargo run --release --bin interactive      # human-vs-human Pente in the termina
 
 ## Architecture
 
-The training loop lives in `src/main.rs` (`train_tard`). Everything is configured by CLI args (`--help` lists them): self-play mode/workers/rollouts, and the training hyperparameters (`--total-steps`, `--steps-per-iter`, `--batch-size`, `--max-lr`/`--min-lr`, `--dirichlet-epsilon`/`--dirichlet-alpha`, replay-buffer sizing, etc.) with defaults matching the original hardcoded values. Network size is fixed by the `TRUNK_CHANNELS`/`RES_BLOCKS`/`VALUE_HIDDEN` consts in `tard.rs`, since checkpoints only load into a same-sized network. At startup the model is loaded from `--resume` (a checkpoint directory) or `--model` (a weights file) or freshly initialized, and only then does `utils::OutputManager::new` create a fresh run directory (it never deletes or reuses earlier runs):
+The training loop lives in `src/main.rs` (`train_tard`). Everything is configured by CLI args (`--help` lists them): self-play mode/workers/rollouts, and the training hyperparameters (`--total-steps`, `--steps-per-iter`, `--batch-size`, `--max-lr`/`--min-lr`, `--dirichlet-epsilon`/`--dirichlet-alpha`, replay-buffer sizing, etc.) with defaults matching the original hardcoded values. Network size is a `tard::NetConfig` (channels, residual blocks, value-head hidden units). A fresh Pente network gets `pente::default_net_config()`, a Pente-specific rule-of-thumb formula from the board size (blocks = longest side + 1; channels ≈ 14·√cells rounded to 32, clamped 64–256). It gives 128/10/128 on the 9×9 board, a size that was originally picked fairly arbitrarily, so treat it as a starting point, not a tuned value. Other games should define their own default rather than reuse this formula. `--channels`/`--blocks`/`--value-hidden` override it for a fresh network only; a loaded model keeps its saved size, and flags that disagree with it are an error. At startup the model is loaded from `--resume` (a checkpoint directory) or `--model` (a weights file) or freshly initialized, and only then does `utils::OutputManager::new` create a fresh run directory (it never deletes or reuses earlier runs):
 
 ```
 <output-dir>/run_<unix_seconds>/
@@ -34,6 +34,7 @@ The training loop lives in `src/main.rs` (`train_tard`). Everything is configure
                                #   evals_per_s, mean_eval_batch, eval_busy_frac
   checkpoints/step_<NNNNNN>/   # zero-padded step
     model.bpk                  # weights
+    model.net.json             # its NetConfig (sidecar written by utils::save_model)
     optim.bpk                  # AdamW state
 ```
 
@@ -55,7 +56,7 @@ Key abstractions:
 - **Throughput counters**: `evaluator::EvalStats` (shared atomics) counts positions evaluated, forward passes, and time inside forward passes; `TardEvaluator` and the batched server record into it, and `SelfPlaySource::eval_stats()` exposes it so `main.rs` can diff it per iteration. In batched mode the batch size is capped by `--workers`, since each worker has one request in flight.
 - **`evaluator::Evaluator` trait**: `evaluate(&G) -> (policy probs, value)`. Policy is a **probability** distribution (not log) with illegal moves masked out by `utils::legalize_policy`. Implementations: `NullEvaluator` (uniform), `TardEvaluator` (direct batch-of-1 forward pass; used by the `inference` bin and `SingleThreaded`), `BatchedClient`, and `ReplicatedClient`. To add a new threaded strategy, implement `EvalBackend` and add a `Mode` variant in `main.rs`.
 - **MCTS (`engine.rs`)**: arena-allocated `MctsTree` (root is `NodeId` 0, children as first-child/next-sibling linked lists), PUCT selection, Dirichlet noise mixed into the root's child priors at the start of each search (`DirichletHParams`; `epsilon=0` disables it). Self-play reuses the chosen move's subtree (`MctsTree::reroot`), and `search` only runs enough simulations to bring the root up to `--rollouts` visits; `mcts()` always starts from a fresh tree. `mcts()` returns the posterior as plain probabilities (share of root visits), which is also the stored training target. The model's policy head outputs **log**-softmax; evaluators `exp()` it and `compute_loss` multiplies it directly by the posterior.
-- **Model (`tard.rs`)**: `Tard`, a 128-channel conv trunk with 10 residual blocks plus policy and value heads; `Tard::for_game::<G>()` and `utils::load_model::<G>()` size it from a `GameState`. `compute_loss` = cross-entropy against the MCTS posterior + MSE against the game outcome.
+- **Model (`tard.rs`)**: `Tard`, a conv trunk of residual blocks plus policy and value heads. The trunk/value-head size comes from a `NetConfig`; input channels and the policy output come from the `GameState` (`Tard::for_game::<G>(&net, device)`). `utils::save_model` writes the weights plus a `<name>.net.json` sidecar, and `utils::load_model::<G>()` reads the sidecar to rebuild the right shape before loading (no sidecar means `NetConfig::default()`, which is what all older model files are). `compute_loss` = cross-entropy against the MCTS posterior + MSE against the game outcome.
 
 ## Notes
 

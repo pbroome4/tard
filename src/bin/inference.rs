@@ -37,9 +37,10 @@ fn main(){
     info!("Starting inference");
     let device = Device::default();
     info!("Device: {:?}", &device);
-    let tard = load_model::<PenteState>(&args.model, &device).unwrap_or_else(|e|{
-        panic!("Failed to load model {}: {:?}", args.model.display(), e)
+    let (tard, net) = load_model::<PenteState>(&args.model, &device).unwrap_or_else(|e|{
+        panic!("Failed to load model {}: {}", args.model.display(), e)
     });
+    info!("Network: {:?}", net);
     let mut eval = TardEvaluator::new(&tard);
 
     let mut g = PenteState::new();

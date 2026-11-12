@@ -8,13 +8,28 @@ use core::fmt;
 use bounded_vec_deque::BoundedVecDeque;
 use rand::RngExt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::gamestate::GameState;
 
-// Network size. Checkpoints only load into a network of the same size.
-pub const TRUNK_CHANNELS: usize = 128; // channels in the conv trunk
-pub const RES_BLOCKS: usize = 10;      // residual blocks in the trunk
-pub const VALUE_HIDDEN: usize = 128;   // hidden units in the value head
+/// Size of the network's trunk and value head. The input and output layers
+/// are sized from the GameState instead. A checkpoint only loads into a
+/// network with the same NetConfig, so it is saved next to every model file
+/// (see utils::save_model / utils::load_model).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetConfig{
+    pub channels: usize,     // channels in the conv trunk
+    pub blocks: usize,       // residual blocks in the trunk
+    pub value_hidden: usize, // hidden units in the value head
+}
 
+impl Default for NetConfig{
+    // The size every model was trained with before NetConfig existed; used
+    // when loading a model file that has no NetConfig sidecar.
+    fn default() -> Self{
+        return Self{ channels: 128, blocks: 10, value_hidden: 128 };
+    }
+}
 
 #[derive(Debug, Module)]
 pub struct Tard{
@@ -36,35 +51,37 @@ pub struct Tard{
     value_fc2: Linear,
 }
 impl Tard {
-    // Builds a network sized for game G.
-    pub fn for_game<G: GameState>(device: &Device) -> Self{
-        return Self::new(G::N_CHAN, G::ROWS, G::COLS, G::ACTN_SPC_SIZE, device);
+    // Builds a network for game G with the given trunk/value-head size.
+    pub fn for_game<G: GameState>(net: &NetConfig, device: &Device) -> Self{
+        return Self::new(G::N_CHAN, G::ROWS, G::COLS, G::ACTN_SPC_SIZE, net, device);
     }
 
     pub fn new(in_chan: usize,
                rows: usize,
                cols: usize,
                action_space_size:usize,
+               net: &NetConfig,
                device: &Device) -> Self
     {
-        info!("Creating Tard in_chan:{}, rows: {},  cols:{}", in_chan, rows, cols);
-        let conv1 = Conv2dConfig::new([in_chan, TRUNK_CHANNELS], [3, 3])
+        info!("Creating Tard in_chan:{}, rows: {},  cols:{}, {:?}", in_chan, rows, cols, net);
+        let ch = net.channels;
+        let conv1 = Conv2dConfig::new([in_chan, ch], [3, 3])
             .with_padding(nn::PaddingConfig2d::Explicit(1, 1, 1, 1))
             .init(device);
-        let bn1 = BatchNormConfig::new(TRUNK_CHANNELS).init(device);
+        let bn1 = BatchNormConfig::new(ch).init(device);
         let mut resnets = Vec::new();
-        for _ in 0..RES_BLOCKS{
-            resnets.push(ResNet::new(TRUNK_CHANNELS, device));
+        for _ in 0..net.blocks{
+            resnets.push(ResNet::new(ch, device));
         }
 
-        let policy_conv = Conv2dConfig::new([TRUNK_CHANNELS, 2], [1, 1]).init(device);
+        let policy_conv = Conv2dConfig::new([ch, 2], [1, 1]).init(device);
         let policy_bn = BatchNormConfig::new(2).init(device);
         let policy_fc = LinearConfig::new(2 * rows * cols, action_space_size).init(device);
 
-        let value_conv = Conv2dConfig::new([TRUNK_CHANNELS, 1], [1, 1]).init(device);
+        let value_conv = Conv2dConfig::new([ch, 1], [1, 1]).init(device);
         let value_bn = BatchNormConfig::new(1).init(device);
-        let value_fc1 = LinearConfig::new(rows * cols, VALUE_HIDDEN).init(device);
-        let value_fc2 = LinearConfig::new(VALUE_HIDDEN, 1).init(device);
+        let value_fc1 = LinearConfig::new(rows * cols, net.value_hidden).init(device);
+        let value_fc2 = LinearConfig::new(net.value_hidden, 1).init(device);
 
         let s = Self {
                 conv1,
