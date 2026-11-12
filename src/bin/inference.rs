@@ -1,4 +1,4 @@
-// Play MiniPente or Pente against a trained model. The game comes from the
+// Play a game against a trained model. The game comes from the
 // model's .net.json sidecar.
 use burn::tensor::{Device};
 use clap::Parser;
@@ -8,14 +8,15 @@ use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 use std::io::{self, Write};
 
 use tard::evaluator::TardEvaluator;
-use tard::gamestate::{GameState, GridGame};
+use tard::gamestate::{GameState, TextGame};
 use tard::minipente::MiniPenteState;
 use tard::pente::PenteState;
+use tard::hive::HiveState;
 use tard::utils::*;
 use tard::engine::*;
 
 #[derive(Parser, Debug)]
-#[command(about = "Play MiniPente or Pente against a trained Tard model")]
+#[command(about = "Play a game (MiniPente, Pente or Hive) against a trained Tard model")]
 struct Args{
     /// Model file to play against (its <name>.net.json sidecar, which names
     /// the game, must sit next to it)
@@ -43,11 +44,12 @@ fn main(){
     match meta.game.as_str(){
         MiniPenteState::NAME => play::<MiniPenteState>(&args),
         PenteState::NAME => play::<PenteState>(&args),
+        HiveState::NAME => play::<HiveState>(&args),
         other => panic!("Model {} is for game '{}', which this bin can't play", args.model.display(), other),
     }
 }
 
-fn play<G: GridGame>(args: &Args){
+fn play<G: TextGame>(args: &Args){
     info!("Starting inference ({})", G::NAME);
     let device = Device::default();
     info!("Device: {:?}", &device);
@@ -68,22 +70,18 @@ fn play<G: GridGame>(args: &Args){
     loop{
         if is_player_move{
             let player: &str = g.active_player();
-            print!("Enter move for {player} as row, col: ");
+            print!("Enter move for {player} ({}): ", G::MOVE_FORMAT);
             io::stdout().flush().unwrap();
-            let (row, col) = match read_move(){
-                Ok(rc) => rc,
-                Err(ReadError::Invalid(_)) => {
-                    println!("Failed to read move");
+            let Some(line) = read_line() else{
+                println!("\nInput closed, quitting");
+                return;
+            };
+            match g.parse_action(&line){
+                Ok(action) => g.apply_action(action),
+                Err(e) => {
+                    println!("Illegal move: {}", e);
                     continue;
                 }
-                Err(ReadError::Eof) => {
-                    println!("\nInput closed, quitting");
-                    return;
-                }
-            };
-            if !g.play_at(row, col){
-                println!("Illegal Move");
-                continue;
             }
             if g.is_terminal(){
                 break;
@@ -95,9 +93,9 @@ fn play<G: GridGame>(args: &Args){
             let player: &str = g.active_player();
             println!("Computer thinking of move for {player}");
             let (action, val) = inference(&g, &mut eval, args.rollouts);
-            let (row, col) = G::action_coord(action);
-            assert!(g.play_at(row, col), "Engine chose an illegal move ({}, {})", row, col);
-            println!("Computer played (row, col): ({}, {})", row, col);
+            let text = g.action_text(action);
+            g.apply_action(action);
+            println!("Computer played: {}", text);
             println!("Computer eval: {}", val);
             if g.is_terminal(){
                 break;

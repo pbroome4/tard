@@ -460,6 +460,7 @@ mod tests{
     use super::*;
     use crate::minipente::{self, MiniPenteState};
     use crate::pente::{self, PenteState};
+    use crate::hive::HiveState;
 
     // Uniform-policy, zero-value evaluator that counts its calls.
     struct Counting{ n: usize }
@@ -658,6 +659,18 @@ mod tests{
                 assert_eq!(game[2].mcts_post[pente::coord_2_action(r, c)], 0.0,
                            "first player's second stone inside the central 5x5 at ({r}, {c})");
             }
+        }
+        for spe in &game{
+            assert_distribution(&spe.mcts_post);
+        }
+    }
+
+    #[test]
+    fn hive_self_play_runs_to_the_end(){
+        let game = run_self_play::<HiveState>(&mut NullEvaluator{}, 4, &noise(), 4);
+        assert!(!game.is_empty() && game.len() <= crate::hive::MAX_PLIES);
+        for pair in game.windows(2){
+            assert_eq!(pair[0].outcome, -pair[1].outcome);
         }
         for spe in &game{
             assert_distribution(&spe.mcts_post);

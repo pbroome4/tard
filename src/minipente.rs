@@ -4,7 +4,8 @@
 use std::{fmt};
 use tracing::trace;
 
-use crate::gamestate::{Action, GameState, GridGame};
+use crate::gamestate::{Action, GameState, TextGame};
+use crate::utils::parse_coord;
 use crate::tard::NetConfig;
 
 pub const ROWS: usize = 9;
@@ -268,19 +269,29 @@ pub fn action_2_coord(action: usize) -> (usize, usize){
 
 
 
-impl GridGame for MiniPenteState{
+impl TextGame for MiniPenteState{
     const PLAYERS: [&'static str; 2] = ["Black", "White"];
+    const MOVE_FORMAT: &'static str = "row, col";
 
     fn active_player(&self) -> &'static str{
         return if self.is_black_ {"Black"} else {"White"};
     }
 
-    fn play_at(&mut self, row: usize, col: usize) -> bool{
-        return self.play(row, col);
+    fn parse_action(&self, input: &str) -> Result<Action, String>{
+        let (row, col) = parse_coord(input)?;
+        if row >= ROWS || col >= COLS{
+            return Err(format!("({}, {}) is off the {}x{} board", row, col, ROWS, COLS));
+        }
+        let action = coord_2_action(row, col);
+        if !self.is_legal_action(action){
+            return Err(format!("({}, {}) is not a legal move", row, col));
+        }
+        return Ok(action);
     }
 
-    fn action_coord(action: Action) -> (usize, usize){
-        return action_2_coord(action);
+    fn action_text(&self, action: Action) -> String{
+        let (row, col) = action_2_coord(action);
+        return format!("{}, {}", row, col);
     }
 }
 

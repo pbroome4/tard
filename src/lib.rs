@@ -1,5 +1,6 @@
 pub mod minipente;
 pub mod pente;
+pub mod hive;
 pub mod tard;
 pub mod engine;
 pub mod gamestate;

@@ -159,24 +159,14 @@ pub fn parse_coord(s: &str) -> Result<(usize, usize), String> {
 }
 
 
-#[derive(Debug)]
-pub enum ReadError{
-    Eof,             // stdin closed (or unreadable); callers should stop prompting
-    Invalid(String), // line read but couldn't be parsed
-}
-
-// Reads one line from stdin. None on EOF or read error.
-fn read_line() -> Option<String>{
+// Reads one line from stdin. None on EOF or read error (stdin closed;
+// callers should stop prompting).
+pub fn read_line() -> Option<String>{
     let mut input_buffer = String::new();
     match io::stdin().read_line(&mut input_buffer){
         Ok(0) | Err(_) => None,
         Ok(_) => Some(input_buffer),
     }
-}
-
-pub fn read_move() -> Result<(usize, usize), ReadError>{
-    let line = read_line().ok_or(ReadError::Eof)?;
-    return parse_coord(&line).map_err(ReadError::Invalid);
 }
 
 // Reads a y/n answer, re-prompting on anything else. None on EOF.

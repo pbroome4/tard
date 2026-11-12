@@ -35,18 +35,20 @@ pub trait GameState: Default + Clone + fmt::Display + Debug + Send + 'static{
 }
 
 // What the terminal bins (inference, arena, interactive) need beyond
-// GameState: games whose moves are typed as a (row, col) point.
-pub trait GridGame: GameState{
+// GameState: player names, and moves as text a person can read and type.
+pub trait TextGame: GameState{
     // Names of the first and second player, e.g. ["Black", "White"].
     const PLAYERS: [&'static str; 2];
+
+    // How to type a move, shown in prompts, e.g. "row, col".
+    const MOVE_FORMAT: &'static str;
 
     // Name of the player to move.
     fn active_player(&self) -> &'static str;
 
-    // Plays at (row, col). Returns false, changing nothing, if that isn't a
-    // legal move (including off the board).
-    fn play_at(&mut self, row: usize, col: usize) -> bool;
+    // Parses a typed move. Errors, saying why, unless it is a legal move here.
+    fn parse_action(&self, input: &str) -> Result<Action, String>;
 
-    // The (row, col) point an action plays at.
-    fn action_coord(action: Action) -> (usize, usize);
+    // `action` (legal here) as text in the format parse_action reads.
+    fn action_text(&self, action: Action) -> String;
 }

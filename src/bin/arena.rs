@@ -1,5 +1,5 @@
 // Plays two trained models against each other and reports the match result.
-// The game (MiniPente or Pente) comes from the models' .net.json sidecars.
+// The game comes from the models' .net.json sidecars.
 use burn::tensor::Device;
 use clap::Parser;
 use std::path::PathBuf;
@@ -11,9 +11,10 @@ use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 
 use tard::engine::{mcts, select_action, DirichletHParams};
 use tard::evaluator::TardEvaluator;
-use tard::gamestate::{GameState, GridGame};
+use tard::gamestate::{GameState, TextGame};
 use tard::minipente::MiniPenteState;
 use tard::pente::PenteState;
+use tard::hive::HiveState;
 use tard::tard::Tard;
 use tard::utils::{load_model, read_model_meta};
 
@@ -83,7 +84,7 @@ struct Watch{
 }
 
 // Each model's color, e.g. "A=White B=Black".
-fn colors<G: GridGame>(a_first: bool) -> String{
+fn colors<G: TextGame>(a_first: bool) -> String{
     let [first, second] = G::PLAYERS;
     return if a_first {
         format!("A={} B={}", first, second)
@@ -94,7 +95,7 @@ fn colors<G: GridGame>(a_first: bool) -> String{
 
 // Plays one game. Returns the result and the number of plies.
 // With `watch`, prints the board after every move.
-fn play_game<G: GridGame>(a: &mut Player, b: &mut Player, a_first: bool, temp_moves: usize,
+fn play_game<G: TextGame>(a: &mut Player, b: &mut Player, a_first: bool, temp_moves: usize,
                          watch: Option<&Watch>)
     -> (Outcome, usize, G)
 {
@@ -113,12 +114,12 @@ fn play_game<G: GridGame>(a: &mut Player, b: &mut Player, a_first: bool, temp_mo
         let (post, val) = mcts(&g, &mut p.eval, p.rollouts, &dhp);
         let sampled = ply < temp_moves;
         let action = select_action(&post, !sampled);
+        let text = watch.map(|_| g.action_text(action));
         g.apply_action(action);
         ply += 1;
         if let Some(w) = watch{
-            let (row, col) = G::action_coord(action);
-            println!("ply {}: {} plays ({}, {}){}  eval for {}: {:+.2}  visits {:.0}%",
-                     ply, mover, row, col, if sampled { " [sampled]" } else { "" },
+            println!("ply {}: {} plays {}{}  eval for {}: {:+.2}  visits {:.0}%",
+                     ply, mover, text.unwrap(), if sampled { " [sampled]" } else { "" },
                      mover, val, 100.0 * post[action]);
             println!("{}", g);
             if !w.delay.is_zero(){
@@ -138,7 +139,7 @@ fn play_game<G: GridGame>(a: &mut Player, b: &mut Player, a_first: bool, temp_mo
     return (result, ply, g);
 }
 
-fn load<G: GridGame>(p: &PathBuf, device: &Device) -> Tard{
+fn load<G: TextGame>(p: &PathBuf, device: &Device) -> Tard{
     let (t, net) = load_model::<G>(p, device).unwrap_or_else(|e|{
         panic!("Failed to load model {}: {}", p.display(), e)
     });
@@ -168,11 +169,12 @@ fn main(){
     match meta.game.as_str(){
         MiniPenteState::NAME => run::<MiniPenteState>(&args),
         PenteState::NAME => run::<PenteState>(&args),
+        HiveState::NAME => run::<HiveState>(&args),
         other => panic!("Model {} is for game '{}', which the arena can't play", args.model_a.display(), other),
     }
 }
 
-fn run<G: GridGame>(args: &Args){
+fn run<G: TextGame>(args: &Args){
     let device = Device::default();
     let tard_a = load::<G>(&args.model_a, &device);
     let tard_b = load::<G>(&args.model_b, &device);

@@ -6,6 +6,7 @@ use clap::{Parser, ValueEnum};
 
 use tard::minipente::MiniPenteState;
 use tard::pente::PenteState;
+use tard::hive::HiveState;
 use tard::gamestate::*;
 use tard::utils::*;
 
@@ -17,10 +18,12 @@ enum Game{
     MiniPente,
     /// Official Pente: 19x19, White first, tournament opening rule
     Pente,
+    /// Hive, base game (no expansion pieces)
+    Hive,
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Human-vs-human MiniPente or Pente in the terminal", long_about = None)]
+#[command(author, version, about = "Human-vs-human MiniPente, Pente or Hive in the terminal", long_about = None)]
 struct Args{
     /// Which game to play
     #[arg(long, value_enum, default_value_t = Game::MiniPente)]
@@ -40,29 +43,29 @@ fn main(){
     match args.game{
         Game::MiniPente => play::<MiniPenteState>(),
         Game::Pente => play::<PenteState>(),
+        Game::Hive => play::<HiveState>(),
     }
 }
 
-fn play<G: GridGame>(){
+fn play<G: TextGame>(){
     let mut brd = G::default();
     loop{
         println!("\n{}", brd);
         let player: &str = brd.active_player();
-        print!("Enter move for {player} as row, col: ");
+        print!("Enter move for {player} ({}): ", G::MOVE_FORMAT);
         io::stdout().flush().unwrap();
-        match read_move(){
-            Ok((row, col)) => {
-                if !brd.play_at(row, col){
-                    println!("Illegal Move");
-                }else if brd.is_terminal(){
+        let Some(line) = read_line() else{
+            println!("\nInput closed, quitting");
+            return;
+        };
+        match brd.parse_action(&line){
+            Ok(action) => {
+                brd.apply_action(action);
+                if brd.is_terminal(){
                     break;
                 }
             }
-            Err(ReadError::Invalid(_)) => println!("Failed to read move"),
-            Err(ReadError::Eof) => {
-                println!("\nInput closed, quitting");
-                return;
-            }
+            Err(e) => println!("Illegal move: {}", e),
         }
     }
     println!("{}", brd);
