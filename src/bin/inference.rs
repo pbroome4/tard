@@ -6,14 +6,14 @@ use tracing::{info};
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 use std::io::{self, Write};
 
-use pentard::evaluator::TardEvaluator;
-use pentard::gamestate::GameState;
-use pentard::pente::{PenteState, action_2_coord};
-use pentard::utils::*;
-use pentard::engine::*;
+use tard::evaluator::TardEvaluator;
+use tard::gamestate::GameState;
+use tard::minipente::{MiniPenteState, action_2_coord};
+use tard::utils::*;
+use tard::engine::*;
 
 #[derive(Parser, Debug)]
-#[command(about = "Play Pente against a trained Tard model")]
+#[command(about = "Play MiniPente against a trained Tard model")]
 struct Args{
     /// Model file to play against
     #[arg(long, default_value = "model.bpk")]
@@ -28,7 +28,7 @@ fn main(){
     let args = Args::parse();
     let mut filter = EnvFilter::from_default_env()
         .add_directive(LevelFilter::WARN.into());
-    filter = filter.add_directive("pentard=info".parse().unwrap());
+    filter = filter.add_directive("tard=info".parse().unwrap());
     filter = filter.add_directive("inference=info".parse().unwrap());
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -37,13 +37,13 @@ fn main(){
     info!("Starting inference");
     let device = Device::default();
     info!("Device: {:?}", &device);
-    let (tard, net) = load_model::<PenteState>(&args.model, &device).unwrap_or_else(|e|{
+    let (tard, net) = load_model::<MiniPenteState>(&args.model, &device).unwrap_or_else(|e|{
         panic!("Failed to load model {}: {}", args.model.display(), e)
     });
     info!("Network: {:?}", net);
     let mut eval = TardEvaluator::new(&tard);
 
-    let mut g = PenteState::new();
+    let mut g = MiniPenteState::new();
     print!("Is human first to play? (y/n) ");
     io::stdout().flush().unwrap();
     let Some(mut is_player_move) = read_yn() else{

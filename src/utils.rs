@@ -239,7 +239,7 @@ pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
 /// What a model file's weights are shaped for, saved next to it as
 /// `<name>.net.json`: the game (input/output layers) and the NetConfig
 /// (trunk and value head). Serialized flat, e.g.
-/// `{"game": "pente", "channels": 128, "blocks": 10, "value_hidden": 128}`.
+/// `{"game": "minipente", "channels": 128, "blocks": 10, "value_hidden": 128}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelMeta{
     pub game: String, // GameState::NAME
@@ -297,11 +297,11 @@ pub fn load_model<G: GameState>(p: &Path, device: &Device) -> Result<(Tard, NetC
 #[cfg(test)]
 mod tests{
     use super::*;
-    use crate::pente::PenteState;
+    use crate::minipente::MiniPenteState;
 
     // A fresh, empty scratch directory under the system temp dir.
     fn scratch_dir(name: &str) -> PathBuf{
-        let d = std::env::temp_dir().join(format!("pentard_test_{}_{}", std::process::id(), name));
+        let d = std::env::temp_dir().join(format!("tard_test_{}_{}", std::process::id(), name));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         return d;
@@ -314,7 +314,7 @@ mod tests{
 
     #[test]
     fn legalize_policy_masks_illegal_moves_and_renormalizes(){
-        let mut g = PenteState::new();
+        let mut g = MiniPenteState::new();
         g.play(0, 0);
         let mut p = vec![0.0; 81];
         p[0] = 0.5; // occupied
@@ -327,7 +327,7 @@ mod tests{
 
     #[test]
     fn legalize_policy_falls_back_to_uniform_without_usable_mass(){
-        let mut g = PenteState::new();
+        let mut g = MiniPenteState::new();
         g.play(4, 4);
         let all_on_illegal = {
             let mut p = vec![0.0; 81];
@@ -366,7 +366,7 @@ mod tests{
 
     #[test]
     fn selfplay_to_training_keeps_targets_and_encodes_state(){
-        let g = PenteState::new();
+        let g = MiniPenteState::new();
         let spe = SelfPlayElement{ g: g.clone(), mcts_post: vec![0.5, 0.5], outcome: -1.0 };
         let te = selfplay_to_training(vec![spe]);
         assert_eq!(te.len(), 1);
@@ -417,14 +417,14 @@ mod tests{
         let model = d.join("model.bpk");
         assert!(read_model_meta(&model).is_err(), "a missing sidecar is an error");
         let meta = ModelMeta{
-            game: "pente".to_string(),
+            game: "minipente".to_string(),
             net: NetConfig{ channels: 64, blocks: 6, value_hidden: 32 },
         };
         write_model_meta(&model, &meta).unwrap();
         assert_eq!(read_model_meta(&model).unwrap(), meta);
         // Flat JSON; every field is required.
         let json = fs::read_to_string(model_meta_path(&model)).unwrap();
-        assert!(json.contains("\"game\": \"pente\"") && json.contains("\"channels\": 64"));
+        assert!(json.contains("\"game\": \"minipente\"") && json.contains("\"channels\": 64"));
         fs::write(model_meta_path(&model), r#"{"channels": 32, "blocks": 2, "value_hidden": 16}"#).unwrap();
         assert!(read_model_meta(&model).is_err(), "the game field is required");
         fs::write(model_meta_path(&model), "not json").unwrap();
@@ -438,8 +438,8 @@ mod tests{
             game: game.to_string(),
             net: NetConfig{ channels: 64, blocks: 6, value_hidden: 64 },
         };
-        assert!(check_game::<PenteState>(&meta("pente")).is_ok());
-        let err = check_game::<PenteState>(&meta("connect4")).unwrap_err();
+        assert!(check_game::<MiniPenteState>(&meta("minipente")).is_ok());
+        let err = check_game::<MiniPenteState>(&meta("connect4")).unwrap_err();
         assert!(err.to_string().contains("connect4"));
     }
 

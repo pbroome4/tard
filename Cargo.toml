@@ -1,5 +1,5 @@
 [package]
-name = "pentard"      # Name of the compiled Rust module
+name = "tard"         # Crate name; also the training binary (src/main.rs)
 version = "0.1.0"
 edition = "2021"
 

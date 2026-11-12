@@ -4,7 +4,7 @@ pub type Action = usize;
 
 // GameState is an abstraction of a 2D board game.
 pub trait GameState: Default + Clone + fmt::Display + Debug + Send + 'static{
-    // Short unique identifier (e.g. "pente"). Saved with every model so a
+    // Short unique identifier (e.g. "minipente"). Saved with every model so a
     // model trained for one game can't be loaded as another.
     const NAME: &'static str;
     const ACTN_SPC_SIZE: usize; // Input action space is scalar [0, ACTN_SPC_SIZE).

@@ -458,12 +458,12 @@ impl Display for DirichletHParams{
 #[cfg(test)]
 mod tests{
     use super::*;
-    use crate::pente::{PenteState, coord_2_action};
+    use crate::minipente::{MiniPenteState, coord_2_action};
 
     // Uniform-policy, zero-value evaluator that counts its calls.
     struct Counting{ n: usize }
-    impl Evaluator<PenteState> for Counting{
-        fn evaluate(&mut self, g: &PenteState) -> (Vec<f32>, f32){
+    impl Evaluator<MiniPenteState> for Counting{
+        fn evaluate(&mut self, g: &MiniPenteState) -> (Vec<f32>, f32){
             self.n += 1;
             return NullEvaluator{}.evaluate(g);
         }
@@ -473,8 +473,8 @@ mod tests{
         return DirichletHParams{ epsilon: 0.25, alpha: 0.25 };
     }
 
-    fn position(moves: &[(usize, usize)]) -> PenteState{
-        let mut g = PenteState::new();
+    fn position(moves: &[(usize, usize)]) -> MiniPenteState{
+        let mut g = MiniPenteState::new();
         for &(r, c) in moves{
             assert!(g.play(r, c));
         }
@@ -536,7 +536,7 @@ mod tests{
         // No terminal positions are reachable this early, so every
         // simulation ends in one network evaluation.
         let mut ev = Counting{ n: 0 };
-        mcts(&PenteState::new(), &mut ev, 200, &noise());
+        mcts(&MiniPenteState::new(), &mut ev, 200, &noise());
         assert_eq!(ev.n, 200);
     }
 
@@ -567,7 +567,7 @@ mod tests{
 
     #[test]
     fn reroot_keeps_the_chosen_subtree_and_its_statistics(){
-        let g = PenteState::new();
+        let g = MiniPenteState::new();
         let mut tree = MctsTree::new(C_PUCT);
         let (post, _) = search(&mut tree, &g, &mut NullEvaluator{}, 300, &noise());
         assert_consistent(&tree);
@@ -594,7 +594,7 @@ mod tests{
 
     #[test]
     fn reused_search_only_tops_up_to_num_sims(){
-        let mut g = PenteState::new();
+        let mut g = MiniPenteState::new();
         let mut tree = MctsTree::new(C_PUCT);
         let (post, _) = search(&mut tree, &g, &mut NullEvaluator{}, 200, &noise());
         let action = select_action(&post, true);
@@ -612,10 +612,10 @@ mod tests{
 
     #[test]
     fn root_noise_keeps_priors_normalized(){
-        let g = PenteState::new();
+        let g = MiniPenteState::new();
         let mut tree = MctsTree::new(C_PUCT);
         mcts_sim(&mut tree, &g, &mut NullEvaluator{}); // expand the root
-        let priors = |t: &MctsTree| mcts_tree_prior(t, 0, PenteState::ACTN_SPC_SIZE);
+        let priors = |t: &MctsTree| mcts_tree_prior(t, 0, MiniPenteState::ACTN_SPC_SIZE);
         let before = priors(&tree);
 
         tree.add_root_noise(&DirichletHParams::default()); // epsilon 0: no-op
@@ -630,7 +630,7 @@ mod tests{
     #[test]
     fn self_play_outcomes_alternate_from_the_winners_perspective(){
         for _ in 0..3{
-            let game = run_self_play::<PenteState>(&mut NullEvaluator{}, 16, &noise(), 4);
+            let game = run_self_play::<MiniPenteState>(&mut NullEvaluator{}, 16, &noise(), 4);
             assert!(!game.is_empty());
             assert!(!game[0].g.is_terminal());
             let last = game.last().unwrap().outcome;

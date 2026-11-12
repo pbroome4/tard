@@ -191,14 +191,14 @@ fn start_worker<G: GameState>(
 mod tests{
     use super::*;
     use crate::evaluator::NullEvaluator;
-    use crate::pente::PenteState;
+    use crate::minipente::MiniPenteState;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Uniform evaluator that panics on its first call if `panics` is set.
     struct MaybePanic{ panics: bool }
-    impl Evaluator<PenteState> for MaybePanic{
-        fn evaluate(&mut self, g: &PenteState) -> (Vec<f32>, f32){
+    impl Evaluator<MiniPenteState> for MaybePanic{
+        fn evaluate(&mut self, g: &MiniPenteState) -> (Vec<f32>, f32){
             if self.panics{
                 panic!("simulated evaluator failure");
             }
@@ -208,7 +208,7 @@ mod tests{
 
     // Hands out clients; the first `n_panicking` of them panic.
     struct FakeBackend{ handed_out: Arc<AtomicUsize>, n_panicking: usize }
-    impl EvalBackend<PenteState> for FakeBackend{
+    impl EvalBackend<MiniPenteState> for FakeBackend{
         type Client = MaybePanic;
         fn client(&mut self) -> MaybePanic{
             let i = self.handed_out.fetch_add(1, Ordering::SeqCst);
@@ -217,7 +217,7 @@ mod tests{
         fn update(&mut self, _t: &Tard){}
     }
 
-    fn pool(n_workers: usize, n_panicking: usize) -> WorkerPool<PenteState, FakeBackend>{
+    fn pool(n_workers: usize, n_panicking: usize) -> WorkerPool<MiniPenteState, FakeBackend>{
         let backend = FakeBackend{ handed_out: Arc::new(AtomicUsize::new(0)), n_panicking };
         return WorkerPool::new(backend, n_workers, 4, DirichletHParams::default(), 2);
     }
@@ -225,7 +225,7 @@ mod tests{
     #[test]
     fn worker_pool_produces_games_and_shuts_down(){
         let mut p = pool(2, 0);
-        let game = SelfPlaySource::<PenteState>::next_game(&mut p).expect("a game");
+        let game = SelfPlaySource::<MiniPenteState>::next_game(&mut p).expect("a game");
         assert!(!game.is_empty());
         drop(p); // must join the workers rather than hang
     }
@@ -233,7 +233,7 @@ mod tests{
     #[test]
     fn worker_pool_returns_none_once_every_worker_has_panicked(){
         let mut p = pool(3, 3);
-        assert!(SelfPlaySource::<PenteState>::next_game(&mut p).is_none());
+        assert!(SelfPlaySource::<MiniPenteState>::next_game(&mut p).is_none());
         assert!(p.handles.is_empty(), "dead workers should have been joined");
     }
 
@@ -243,7 +243,7 @@ mod tests{
         // The panicking worker dies on its first evaluation; it is reaped
         // on a later next_game call while the others keep producing games.
         for _ in 0..200{
-            assert!(SelfPlaySource::<PenteState>::next_game(&mut p).is_some());
+            assert!(SelfPlaySource::<MiniPenteState>::next_game(&mut p).is_some());
             if p.handles.len() == 2{
                 return;
             }

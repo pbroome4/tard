@@ -4,9 +4,9 @@ use std::str::FromStr;
 use tracing::Level;
 use clap::Parser;
 
-use pentard::pente::*;
-use pentard::gamestate::*;
-use pentard::utils::*;
+use tard::minipente::*;
+use tard::gamestate::*;
+use tard::utils::*;
 
 
 #[derive(Parser, Debug)]
@@ -24,7 +24,7 @@ fn main(){
         .with_max_level(Level::from_str(&args.log_level).unwrap()) // Set max level: TRACE, DEBUG, INFO, WARN, ERROR, or OFF
         .init();
 
-    let mut brd = PenteState::new();
+    let mut brd = MiniPenteState::new();
     loop{
         println!("\n{}", brd);
         let player: &str = brd.active_plyr_str();

@@ -4986,22 +4986,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pentard"
-version = "0.1.0"
-dependencies = [
- "bounded-vec-deque",
- "burn",
- "clap",
- "crossbeam",
- "rand 0.10.3",
- "rand_distr",
- "serde",
- "serde_json",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6536,6 +6520,22 @@ dependencies = [
  "filetime",
  "libc",
  "xattr",
+]
+
+[[package]]
+name = "tard"
+version = "0.1.0"
+dependencies = [
+ "bounded-vec-deque",
+ "burn",
+ "clap",
+ "crossbeam",
+ "rand 0.10.3",
+ "rand_distr",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

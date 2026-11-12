@@ -9,14 +9,13 @@ use std::path::PathBuf;
 use std::time::Instant;
 use serde::Serialize;
 
-use pentard::gamestate::GameState;
-use pentard::pente::{self, PenteState};
-use pentard::tard::NetConfig;
-use pentard::engine::*;
-use pentard::evaluator::{BatchedBackend, ReplicatedBackend};
-use pentard::selfplay::{SelfPlaySource, SingleThreaded, WorkerPool};
-use pentard::utils::*;
-use pentard::tard::{self, *};
+use tard::gamestate::GameState;
+use tard::minipente::{self, MiniPenteState};
+use tard::engine::*;
+use tard::evaluator::{BatchedBackend, ReplicatedBackend};
+use tard::selfplay::{SelfPlaySource, SingleThreaded, WorkerPool};
+use tard::utils::*;
+use tard::tard::*;
 ////////////////////////////////////////
 //      ## Main thread
 //  1) Initialize model, vars, logging, etc
@@ -40,7 +39,8 @@ use pentard::tard::{self, *};
 #[derive(Copy, Clone, Debug, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Game{
-    Pente,
+    #[value(name = "minipente")]
+    MiniPente,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum, Serialize)]
@@ -56,7 +56,7 @@ enum Mode{
 #[command(about = "Train Tard via MCTS self-play")]
 struct Args{
     /// Which game to train
-    #[arg(long, value_enum, default_value_t = Game::Pente)]
+    #[arg(long, value_enum, default_value_t = Game::MiniPente)]
     game: Game,
 
     /// How self-play games are generated
@@ -91,15 +91,15 @@ struct Args{
     // A resumed model keeps the size saved with it; passing a value that
     // disagrees with it is an error.
 
-    /// Channels in the conv trunk [default: the game's default, 64 for Pente]
+    /// Channels in the conv trunk [default: the game's default, 64 for MiniPente]
     #[arg(long)]
     channels: Option<usize>,
 
-    /// Residual blocks in the trunk [default: the game's default, 6 for Pente]
+    /// Residual blocks in the trunk [default: the game's default, 6 for MiniPente]
     #[arg(long)]
     blocks: Option<usize>,
 
-    /// Hidden units in the value head [default: the game's default, 64 for Pente]
+    /// Hidden units in the value head [default: the game's default, 64 for MiniPente]
     #[arg(long)]
     value_hidden: Option<usize>,
 
@@ -174,12 +174,12 @@ fn main(){
     let args = Args::parse();
     let mut filter = EnvFilter::from_default_env()
         .add_directive(LevelFilter::WARN.into());
-    filter = filter.add_directive("pentard=info".parse().unwrap());
+    filter = filter.add_directive("tard=info".parse().unwrap());
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .init();
     match args.game{
-        Game::Pente => train_tard::<PenteState>(&args, pente::default_net_config()),
+        Game::MiniPente => train_tard::<MiniPenteState>(&args, minipente::default_net_config()),
     }
 }
 
@@ -246,7 +246,7 @@ fn train_tard<G: GameState>(args: &Args, default_net: NetConfig){
     // an empty run directory behind.
     let config_json = serde_json::to_string_pretty(args).expect("Unable to serialize config");
     let mut om = OutputManager::new(&args.output_dir, &config_json).unwrap();
-    let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
+    let mut trn_buf = TrainingBuffer::new(train_mem_capacity);
 
     info!("Self-play mode: {:?}", args.mode);
     let mut source: Box<dyn SelfPlaySource<G>> = match args.mode{

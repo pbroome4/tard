@@ -1,3 +1,6 @@
+//! MiniPente: Pente on a 9x9 board. Five in a row (or longer) wins, as does
+//! capturing five pairs (flanking exactly two enemy stones); a full board is a draw.
+
 use std::{fmt};
 use tracing::trace;
 
@@ -23,7 +26,7 @@ enum Status{
 }
 
 #[derive(Clone, Debug)]
-pub struct PenteState{
+pub struct MiniPenteState{
     board_: [[Piece; COLS]; ROWS],
     b_caps_: u8, 
     w_caps_: u8,
@@ -34,21 +37,21 @@ pub struct PenteState{
     status_: Status,
 }
 
-/// Default network size for a fresh Pente model. Chosen somewhat
+/// Default network size for a fresh MiniPente model. Chosen somewhat
 /// arbitrarily, not tuned: it's smaller than the old 128/10/128 because that
 /// seemed oversized for a 9x9 board.
 pub fn default_net_config() -> NetConfig{
     return NetConfig{ channels: 64, blocks: 6, value_hidden: 64 };
 }
 
-impl Default for PenteState{
+impl Default for MiniPenteState{
     fn default() -> Self {
         return Self::new();
     }
 }
 
-impl GameState for PenteState{
-    const NAME: &'static str = "pente";
+impl GameState for MiniPenteState{
+    const NAME: &'static str = "minipente";
     const ACTN_SPC_SIZE: usize = ROWS * COLS;
     const N_CHAN: usize = 4;
     const ROWS: usize = ROWS;
@@ -60,15 +63,15 @@ impl GameState for PenteState{
     // channel 2 is occupancy mask of opponent 
     // channel 3 is captures of opponent 
     fn to_tensor(&self) -> Vec<f32> {
-        let mut a = vec![0.0; PenteState::COLS * PenteState::ROWS * PenteState::N_CHAN];
+        let mut a = vec![0.0; MiniPenteState::COLS * MiniPenteState::ROWS * MiniPenteState::N_CHAN];
         fn index(chan: usize, row: usize, col: usize) -> usize{
-            return chan*PenteState::ROWS * PenteState::COLS +
-                   row * PenteState::COLS + col;
+            return chan*MiniPenteState::ROWS * MiniPenteState::COLS +
+                   row * MiniPenteState::COLS + col;
         }
         let b_ofst = if self.is_black_ {0} else {2};
         let w_ofst = if self.is_black_ {2} else {0};
-        for r in 0..PenteState::ROWS{
-            for c in 0..PenteState::COLS{
+        for r in 0..MiniPenteState::ROWS{
+            for c in 0..MiniPenteState::COLS{
                 if self.board_[r][c] == Piece::Black{
                     a[index(b_ofst, r, c)] = 1.0;
                 }else if self.board_[r][c] == Piece::White{
@@ -99,7 +102,7 @@ impl GameState for PenteState{
         self.update_captures(row, col);
         if self.b_caps_ >= 5 || self.w_caps_ >= 5 || self.is_con5(row,col){
             self.status_ = Status::Won(self.get_active_piece());
-        }else if self.num_pieces_ == PenteState::ROWS * PenteState::COLS{
+        }else if self.num_pieces_ == MiniPenteState::ROWS * MiniPenteState::COLS{
             self.status_ = Status::Draw;
         }
         self.is_black_ = !self.is_black_;
@@ -110,7 +113,7 @@ impl GameState for PenteState{
     }
     
 
-    // In Pente the player who just moved is the one who can win, so this is
+    // In MiniPente the player who just moved is the one who can win, so this is
     // never +1: it's -1 (side to move lost) or 0 (draw).
     fn get_terminal_value(&self) -> f32{
         match self.status_{
@@ -122,11 +125,11 @@ impl GameState for PenteState{
 }
 
 
-impl PenteState{
+impl MiniPenteState{
     pub fn new() -> Self{
-        trace!("Pente new()");
+        trace!("MiniPente new()");
         Self{
-            board_: [[Piece::Empty; PenteState::COLS]; PenteState::ROWS],
+            board_: [[Piece::Empty; MiniPenteState::COLS]; MiniPenteState::ROWS],
             b_caps_:  0,
             w_caps_:  0,
             is_black_: true,
@@ -139,7 +142,7 @@ impl PenteState{
     pub fn play(&mut self, row: usize, col: usize) -> bool{
         // Bounds-check before flattening: e.g. (0, COLS) would otherwise
         // wrap to the legal action for (1, 0).
-        if row >= PenteState::ROWS || col >= PenteState::COLS{
+        if row >= MiniPenteState::ROWS || col >= MiniPenteState::COLS{
             return false;
         }
         let action = coord_2_action(row,col);
@@ -153,7 +156,7 @@ impl PenteState{
     // No action is legal once the game is over.
     pub fn is_legal_action(&self, action: usize) -> bool{
         let (row, col) = action_2_coord(action);
-        return !self.is_terminal() && row < PenteState::ROWS && col < PenteState::COLS && self.board_[row][col] == Piece::Empty;
+        return !self.is_terminal() && row < MiniPenteState::ROWS && col < MiniPenteState::COLS && self.board_[row][col] == Piece::Empty;
     }
     
     pub fn active_plyr_str(&self) -> &str{
@@ -199,7 +202,7 @@ impl PenteState{
     // Safe method to grab piece occupying space. 
     // If space is out of bounds it returns None.
     fn get_square(&self, row: i32, col: i32) -> Option<Piece>{
-        if row < 0 || row >= (PenteState::ROWS as i32) || col < 0 || col >= (PenteState::COLS as i32) {
+        if row < 0 || row >= (MiniPenteState::ROWS as i32) || col < 0 || col >= (MiniPenteState::COLS as i32) {
             return None
         }
         let r = row as usize;
@@ -254,27 +257,27 @@ impl PenteState{
 }
 
 pub fn coord_2_action(row: usize, col:usize) -> usize{
-    row * PenteState::COLS + col
+    row * MiniPenteState::COLS + col
 }
 
 pub fn action_2_coord(action: usize) -> (usize, usize){
-    let row = action / PenteState::COLS;
-    let col = action - row * PenteState::COLS;
+    let row = action / MiniPenteState::COLS;
+    let col = action - row * MiniPenteState::COLS;
     (row, col)
 }
 
 
 
-impl fmt::Display for PenteState {
+impl fmt::Display for MiniPenteState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "   ")?;
-        for col in 0..PenteState::COLS{
+        for col in 0..MiniPenteState::COLS{
             write!(f, "{:02} ", col)?;
         }
         writeln!(f)?;
-        for row in 0..PenteState::ROWS{
+        for row in 0..MiniPenteState::ROWS{
             write!(f, "{:02}  ", row)?;
-            for col in 0..PenteState::COLS{
+            for col in 0..MiniPenteState::COLS{
                 if self.board_[row][col] == Piece::Empty{
                     write!(f, "·  ")?;
                 }else if self.board_[row][col]  == Piece::Black{
@@ -296,8 +299,8 @@ mod tests{
     use super::*;
 
     // Builds a position from rows of '.', 'B', 'W' (missing rows/cols are empty).
-    fn board(rows: &[&str], black_to_move: bool) -> PenteState{
-        let mut s = PenteState::new();
+    fn board(rows: &[&str], black_to_move: bool) -> MiniPenteState{
+        let mut s = MiniPenteState::new();
         for (r, row) in rows.iter().enumerate(){
             for (c, ch) in row.chars().enumerate(){
                 s.board_[r][c] = match ch{
@@ -314,13 +317,13 @@ mod tests{
         return s;
     }
 
-    fn piece(s: &PenteState, r: usize, c: usize) -> Piece{
+    fn piece(s: &MiniPenteState, r: usize, c: usize) -> Piece{
         return s.board_[r][c];
     }
 
     #[test]
     fn new_game_is_empty_with_black_to_move(){
-        let s = PenteState::new();
+        let s = MiniPenteState::new();
         assert!(s.is_black());
         assert!(!s.is_terminal());
         assert!(s.legal_actions_mask().iter().all(|&l| l));
@@ -329,7 +332,7 @@ mod tests{
 
     #[test]
     fn play_alternates_players_and_rejects_occupied_squares(){
-        let mut s = PenteState::new();
+        let mut s = MiniPenteState::new();
         assert!(s.play(4, 4));
         assert_eq!(piece(&s, 4, 4), Piece::Black);
         assert!(!s.is_black());
@@ -342,7 +345,7 @@ mod tests{
 
     #[test]
     fn play_rejects_out_of_bounds_without_wrapping(){
-        let mut s = PenteState::new();
+        let mut s = MiniPenteState::new();
         // (0, COLS) would flatten to the action for (1, 0).
         assert!(!s.play(0, COLS));
         assert!(!s.play(ROWS, 0));
@@ -403,7 +406,7 @@ mod tests{
         for (dr, dc) in DIRS{
             // Black plays at the centre; W W then B lie along the direction.
             let (r0, c0) = (4i32, 4i32);
-            let mut s = PenteState::new();
+            let mut s = MiniPenteState::new();
             s.board_[(r0 + dr) as usize][(c0 + dc) as usize] = Piece::White;
             s.board_[(r0 + 2 * dr) as usize][(c0 + 2 * dc) as usize] = Piece::White;
             s.board_[(r0 + 3 * dr) as usize][(c0 + 3 * dc) as usize] = Piece::Black;
@@ -465,7 +468,7 @@ mod tests{
     fn full_board_without_a_win_is_a_draw(){
         // Pattern with no five in any direction (runs of at most 2), with
         // (8, 8) left empty. White's stone there makes no five and no capture.
-        let mut s = PenteState::new();
+        let mut s = MiniPenteState::new();
         for r in 0..ROWS{
             for c in 0..COLS{
                 s.board_[r][c] = if (c + 2 * r) % 4 < 2 {Piece::Black} else {Piece::White};
@@ -498,7 +501,7 @@ mod tests{
     #[test]
     #[should_panic(expected = "Illegal action")]
     fn apply_action_panics_on_occupied_square(){
-        let mut s = PenteState::new();
+        let mut s = MiniPenteState::new();
         s.apply_action(0);
         s.apply_action(0);
     }
@@ -506,17 +509,17 @@ mod tests{
     #[test]
     #[should_panic(expected = "non-terminal")]
     fn terminal_value_panics_on_ongoing_game(){
-        PenteState::new().get_terminal_value();
+        MiniPenteState::new().get_terminal_value();
     }
 
     #[test]
     fn to_tensor_is_from_the_side_to_moves_perspective(){
         let plane = ROWS * COLS;
         let at = |chan: usize, r: usize, c: usize| chan * plane + r * COLS + c;
-        let mut s = PenteState::new();
+        let mut s = MiniPenteState::new();
         s.play(4, 4); // Black stone; White to move
         let t = s.to_tensor();
-        assert_eq!(t.len(), PenteState::N_CHAN * plane);
+        assert_eq!(t.len(), MiniPenteState::N_CHAN * plane);
         assert_eq!(t[at(0, 4, 4)], 0.0, "channel 0 is the side to move (White)");
         assert_eq!(t[at(2, 4, 4)], 1.0, "channel 2 is the opponent (Black)");
         // Captures fill the whole plane of the capturing player's channel.

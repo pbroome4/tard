@@ -8,12 +8,12 @@ use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 
-use pentard::engine::{mcts, select_action, DirichletHParams};
-use pentard::evaluator::TardEvaluator;
-use pentard::gamestate::GameState;
-use pentard::pente::{PenteState, action_2_coord};
-use pentard::tard::Tard;
-use pentard::utils::load_model;
+use tard::engine::{mcts, select_action, DirichletHParams};
+use tard::evaluator::TardEvaluator;
+use tard::gamestate::GameState;
+use tard::minipente::{MiniPenteState, action_2_coord};
+use tard::tard::Tard;
+use tard::utils::load_model;
 
 #[derive(Parser, Debug)]
 #[command(about = "Play two trained Tard models against each other")]
@@ -84,10 +84,10 @@ struct Watch{
 // With `watch`, prints the board after every move.
 fn play_game(a: &mut Player, b: &mut Player, a_is_black: bool, temp_moves: usize,
              watch: Option<&Watch>)
-    -> (Outcome, usize, PenteState)
+    -> (Outcome, usize, MiniPenteState)
 {
     let dhp = DirichletHParams{ epsilon: 0.0, ..Default::default() };
-    let mut g = PenteState::default();
+    let mut g = MiniPenteState::default();
     let mut ply = 0;
     // Black moves on even plies.
     let a_to_move = |ply: usize| (ply % 2 == 0) == a_is_black;
@@ -128,7 +128,7 @@ fn play_game(a: &mut Player, b: &mut Player, a_is_black: bool, temp_moves: usize
 }
 
 fn load(p: &PathBuf, device: &Device) -> Tard{
-    let (t, net) = load_model::<PenteState>(p, device).unwrap_or_else(|e|{
+    let (t, net) = load_model::<MiniPenteState>(p, device).unwrap_or_else(|e|{
         panic!("Failed to load model {}: {}", p.display(), e)
     });
     info!("{}: {:?}", p.display(), net);
@@ -144,7 +144,7 @@ fn main(){
     let args = Args::parse();
     let filter = EnvFilter::from_default_env()
         .add_directive(LevelFilter::WARN.into())
-        .add_directive("pentard=info".parse().unwrap())
+        .add_directive("tard=info".parse().unwrap())
         .add_directive("arena=info".parse().unwrap());
     tracing_subscriber::fmt().with_env_filter(filter).init();
     assert!(args.games > 0, "--games must be at least 1");

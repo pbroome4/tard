@@ -1,4 +1,4 @@
-pub mod pente;
+pub mod minipente;
 pub mod tard;
 pub mod engine;
 pub mod gamestate;
