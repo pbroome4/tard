@@ -222,6 +222,8 @@ fn train_tard(args: &Args){
     let mut el_cnt_threshold = first_n_elements_train;
     let mut current_lr = ModuleLearningRate::default();
     while is_running && train_step_cnt < n_training_steps{
+        let iter_start = Instant::now();
+        let evals_at_start = source.eval_stats();
         info!("Awaiting Self-Play Games");
         let mut el_cnt = 0;
         let (mut games, mut draws) = (0, 0);
@@ -248,8 +250,10 @@ fn train_tard(args: &Args){
             break;
         }
         el_cnt_threshold = n_elements_per_train; // After epoch 0, use this instead
+        let selfplay_wait = iter_start.elapsed();
 
         info!("Performing training {}/{}", train_step_cnt, n_training_steps);
+        let train_start = Instant::now();
         // Per-step losses are summed on the device (detached from the graph)
         // and read back once, so logging doesn't force a GPU sync every step.
         let mut sum_loss = Tensor::<1>::zeros([1], &device);
@@ -277,6 +281,7 @@ fn train_tard(args: &Args){
         }
         let mean = |t: Tensor<1>| t.into_scalar::<f32>() / n_steps.max(1) as f32;
         let (mean_loss, mean_ce, mean_mse) = (mean(sum_loss), mean(sum_ce), mean(sum_mse));
+        let train_time = train_start.elapsed(); // after the readback, so GPU work is included
         info!("Training batch completed. Progress {}/{} complete", train_step_cnt, n_training_steps);
         info!("Mean loss over {} steps: {} (policy: {}, value: {})",
               n_steps, mean_loss, mean_ce, mean_mse);
@@ -290,6 +295,15 @@ fn train_tard(args: &Args){
                     .expect("Unable to save model");
         opt.save(ckpt.join("optim.bpk"))
            .expect("Unable to save optimizer state");
+        let iter_time = iter_start.elapsed();
+        let evals = source.eval_stats().since(&evals_at_start);
+        info!("Iteration took {:.1}s (self-play wait {:.1}s, training {:.1}s): {:.1} positions/s, \
+               {:.0} evals/s, mean eval batch {:.1}, eval busy {:.0}%",
+              iter_time.as_secs_f64(), selfplay_wait.as_secs_f64(), train_time.as_secs_f64(),
+              el_cnt as f64 / iter_time.as_secs_f64(),
+              evals.positions as f64 / iter_time.as_secs_f64(),
+              evals.positions as f64 / evals.batches.max(1) as f64,
+              100.0 * evals.busy.as_secs_f64() / iter_time.as_secs_f64());
         om.append_metrics(&IterationMetrics{
             step: train_step_cnt,
             wall_time_s: start_time.elapsed().as_secs_f64(),
@@ -300,6 +314,12 @@ fn train_tard(args: &Args){
             games,
             positions: el_cnt,
             draws,
+            iter_time_s: iter_time.as_secs_f64(),
+            selfplay_wait_s: selfplay_wait.as_secs_f64(),
+            train_s: train_time.as_secs_f64(),
+            evals: evals.positions,
+            eval_batches: evals.batches,
+            eval_busy_s: evals.busy.as_secs_f64(),
         }).expect("Unable to write metrics");
     }
     info!("Main thread loop over at training step {}/{}", train_step_cnt, n_training_steps);

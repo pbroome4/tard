@@ -16,7 +16,7 @@ use tracing::{debug, info};
 
 use crate::gamestate::*;
 use crate::tard::*;
-use super::{Evaluator, EvalBackend, TardEvaluator};
+use super::{Evaluator, EvalBackend, EvalStats, EvalStatsSnapshot, TardEvaluator};
 
 
 struct Shared{
@@ -46,7 +46,7 @@ impl <G:GameState> Evaluator<G> for ReplicatedClient{
         if self.shared.version.load(Ordering::Acquire) != self.seen{
             let (v, t) = self.shared.snapshot();
             debug!("Replicated client updating model v{} -> v{}", self.seen, v);
-            self.local = TardEvaluator::new(&t);
+            self.local = TardEvaluator::with_stats(&t, self.local.stats().clone());
             self.seen = v;
         }
         return self.local.evaluate(g);
@@ -56,6 +56,7 @@ impl <G:GameState> Evaluator<G> for ReplicatedClient{
 
 pub struct ReplicatedBackend<G>{
     shared: Arc<Shared>,
+    stats: EvalStats, // shared by all clients
     _marker: PhantomData<fn() -> G>,
 }
 
@@ -67,6 +68,7 @@ impl <G:GameState> ReplicatedBackend<G>{
         };
         return Self{
             shared: Arc::new(shared),
+            stats: EvalStats::default(),
             _marker: PhantomData,
         };
     }
@@ -79,7 +81,7 @@ impl <G:GameState> EvalBackend<G> for ReplicatedBackend<G>{
         let (v, t) = self.shared.snapshot();
         return ReplicatedClient{
             shared: self.shared.clone(),
-            local: TardEvaluator::new(&t),
+            local: TardEvaluator::with_stats(&t, self.stats.clone()),
             seen: v,
         };
     }
@@ -89,5 +91,9 @@ impl <G:GameState> EvalBackend<G> for ReplicatedBackend<G>{
         *m = t.valid();
         let v = self.shared.version.fetch_add(1, Ordering::AcqRel) + 1;
         info!("Published replicated model v{}", v);
+    }
+
+    fn stats(&self) -> EvalStatsSnapshot{
+        return self.stats.snapshot();
     }
 }

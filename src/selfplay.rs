@@ -14,7 +14,7 @@ use crossbeam::channel::{Receiver, Sender};
 use tracing::{debug, error, info, warn};
 
 use crate::engine::{run_self_play, DirichletHParams, SelfPlayElement};
-use crate::evaluator::{Evaluator, EvalBackend, TardEvaluator};
+use crate::evaluator::{Evaluator, EvalBackend, EvalStatsSnapshot, TardEvaluator};
 use crate::gamestate::GameState;
 use crate::tard::Tard;
 use crate::utils::panic_message;
@@ -24,6 +24,8 @@ pub trait SelfPlaySource<G: GameState>{
     // Blocks until one finished game is available. None means the source has shut down.
     fn next_game(&mut self) -> Option<Vec<SelfPlayElement<G>>>;
     fn update_model(&mut self, t: &Tard);
+    // Cumulative network-evaluation counters for this source's self-play.
+    fn eval_stats(&self) -> EvalStatsSnapshot;
 }
 
 
@@ -53,7 +55,11 @@ impl <G: GameState> SelfPlaySource<G> for SingleThreaded{
     }
 
     fn update_model(&mut self, t: &Tard){
-        self.eval = TardEvaluator::new(t);
+        self.eval = TardEvaluator::with_stats(t, self.eval.stats().clone());
+    }
+
+    fn eval_stats(&self) -> EvalStatsSnapshot{
+        return self.eval.stats().snapshot();
     }
 }
 
@@ -105,6 +111,10 @@ impl <G: GameState, B: EvalBackend<G>> SelfPlaySource<G> for WorkerPool<G, B>{
 
     fn update_model(&mut self, t: &Tard){
         self.backend.update(t);
+    }
+
+    fn eval_stats(&self) -> EvalStatsSnapshot{
+        return self.backend.stats();
     }
 }
 

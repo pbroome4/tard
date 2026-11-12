@@ -29,7 +29,9 @@ The training loop lives in `src/main.rs` (`train_tard`). Everything is configure
 <output-dir>/run_<unix_seconds>/
   config.json                  # all CLI args (serde-serialized `Args`)
   metrics.csv                  # per iteration: step, wall_time_s, lr, loss, policy_loss, value_loss,
-                               #   games, positions, mean_game_len, draw_rate (losses are means over the iteration)
+                               #   games, positions, mean_game_len, draw_rate (losses are means over the iteration),
+                               #   then throughput: iter_time_s, selfplay_wait_s, train_s, positions_per_s,
+                               #   evals_per_s, mean_eval_batch, eval_busy_frac
   checkpoints/step_<NNNNNN>/   # zero-padded step
     model.bpk                  # weights
     optim.bpk                  # AdamW state
@@ -50,6 +52,7 @@ Self-play sources (`--mode`), in `src/selfplay.rs`:
 Key abstractions:
 - **`gamestate::GameState` trait**: the generic game interface (`to_tensor`, `legal_actions_mask` -> `Vec<bool>`, `apply_action`, `get_terminal_value` -> `f32`, plus associated consts `N_CHAN/ROWS/COLS/ACTN_SPC_SIZE`). The engine and evaluators are generic over it; `pente::PenteState` is the only implementation. Actions are flat indices `row * COLS + col`.
 - **Value perspective**: `get_terminal_value` is from the side-to-move's perspective. In Pente the player who just moved wins, so a terminal state returns `-1` (or `0` for a draw). `run_self_play` back-fills outcomes by walking states in reverse with alternating sign.
+- **Throughput counters**: `evaluator::EvalStats` (shared atomics) counts positions evaluated, forward passes, and time inside forward passes; `TardEvaluator` and the batched server record into it, and `SelfPlaySource::eval_stats()` exposes it so `main.rs` can diff it per iteration. In batched mode the batch size is capped by `--workers`, since each worker has one request in flight.
 - **`evaluator::Evaluator` trait**: `evaluate(&G) -> (policy probs, value)`. Policy is a **probability** distribution (not log) with illegal moves masked out by `utils::legalize_policy`. Implementations: `NullEvaluator` (uniform), `TardEvaluator` (direct batch-of-1 forward pass; used by the `inference` bin and `SingleThreaded`), `BatchedClient`, and `ReplicatedClient`. To add a new threaded strategy, implement `EvalBackend` and add a `Mode` variant in `main.rs`.
 - **MCTS (`engine.rs`)**: arena-allocated `MctsTree` (root is `NodeId` 0, children as first-child/next-sibling linked lists), PUCT selection, Dirichlet noise mixed into the root's child priors at the start of each search (`DirichletHParams`; `epsilon=0` disables it). Self-play reuses the chosen move's subtree (`MctsTree::reroot`), and `search` only runs enough simulations to bring the root up to `--rollouts` visits; `mcts()` always starts from a fresh tree. `mcts()` returns the posterior as plain probabilities (share of root visits), which is also the stored training target. The model's policy head outputs **log**-softmax; evaluators `exp()` it and `compute_loss` multiplies it directly by the posterior.
 - **Model (`tard.rs`)**: `Tard`, a 128-channel conv trunk with 10 residual blocks plus policy and value heads; `Tard::for_game::<G>()` and `utils::load_model::<G>()` size it from a `GameState`. `compute_loss` = cross-entropy against the MCTS posterior + MSE against the game outcome.

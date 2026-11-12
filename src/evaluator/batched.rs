@@ -18,7 +18,8 @@ use tracing::{trace, debug, info, warn};
 use crate::gamestate::*;
 use crate::tard::*;
 use crate::utils::*;
-use super::{Evaluator, EvalBackend};
+use std::time::Instant;
+use super::{Evaluator, EvalBackend, EvalStats, EvalStatsSnapshot};
 
 
 // The client encodes the state and legalizes the returned policy itself, so
@@ -53,6 +54,7 @@ pub struct BatchedBackend<G>{
     s_update: Sender<Tard>,
     s_eval:  Sender<EvalRequest>,
     server: Option<JoinHandle<()>>,
+    stats: EvalStats, // recorded by the server thread
     _marker: PhantomData<fn() -> G>,
 }
 
@@ -60,16 +62,19 @@ impl <G:GameState> BatchedBackend<G>{
     pub fn new(t: &Tard, max_batch_size: usize) -> Self{
         let (s_u, r_u) = crossbeam::channel::unbounded();
         let (s_e, r_e) = crossbeam::channel::unbounded();
+        let stats = EvalStats::default();
+        let server_stats = stats.clone();
         let server = thread::Builder::new()
             .name("batched-eval-server".to_string())
             .spawn(move ||{
-                run_server::<G>(r_u, r_e, max_batch_size)
+                run_server::<G>(r_u, r_e, max_batch_size, server_stats)
             })
             .expect("Failed to spawn batched eval server thread");
         let mut slf = Self {
             s_update: s_u,
             s_eval: s_e,
             server: Some(server),
+            stats,
             _marker: PhantomData,
         };
         EvalBackend::<G>::update(&mut slf, t);
@@ -96,6 +101,10 @@ impl <G:GameState> EvalBackend<G> for BatchedBackend<G>{
             panic!("Batched eval server is gone ({})", reason);
         }
     }
+
+    fn stats(&self) -> EvalStatsSnapshot{
+        return self.stats.snapshot();
+    }
 }
 
 
@@ -104,7 +113,8 @@ impl <G:GameState> EvalBackend<G> for BatchedBackend<G>{
 fn run_server<G:GameState>(
     r_u: Receiver<Tard>,
     r_e: Receiver<EvalRequest>,
-    max_batch_size: usize)
+    max_batch_size: usize,
+    stats: EvalStats)
 {
     info!("Batched eval server starting, awaiting Tard");
     let Ok(mut t) = r_u.recv() else {
@@ -131,6 +141,7 @@ fn run_server<G:GameState>(
         if !q.is_empty(){
             let batch_size = std::cmp::min(q.len(), max_batch_size);
             trace!("Computing batch of size {}", batch_size);
+            let start = Instant::now();
             let b_tens = batch_eval_tensor::<G>(&q, &device, batch_size);
             let (p_batch, v_batch) = t.forward(b_tens);
             let p_batch_vec = p_batch.exp()
@@ -140,6 +151,7 @@ fn run_server<G:GameState>(
             let v_batch_vec = v_batch.into_data()
                                      .try_into_vec::<f32>()
                                      .unwrap();
+            stats.record(batch_size, start.elapsed());
             let responses = p_batch_vec.chunks_exact(G::ACTN_SPC_SIZE).zip(v_batch_vec);
             for (req, (p, v)) in q.drain(0..batch_size).zip(responses){
                 trace!("Batch element has p: {:?}, v: {}", p, v);
