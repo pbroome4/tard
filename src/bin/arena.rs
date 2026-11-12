@@ -1,4 +1,5 @@
 // Plays two trained models against each other and reports the match result.
+// The game (MiniPente or Pente) comes from the models' .net.json sidecars.
 use burn::tensor::Device;
 use clap::Parser;
 use std::path::PathBuf;
@@ -10,10 +11,11 @@ use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 
 use tard::engine::{mcts, select_action, DirichletHParams};
 use tard::evaluator::TardEvaluator;
-use tard::gamestate::GameState;
-use tard::minipente::{MiniPenteState, action_2_coord};
+use tard::gamestate::{GameState, GridGame};
+use tard::minipente::MiniPenteState;
+use tard::pente::PenteState;
 use tard::tard::Tard;
-use tard::utils::load_model;
+use tard::utils::{load_model, read_model_meta};
 
 #[derive(Parser, Debug)]
 #[command(about = "Play two trained Tard models against each other")]
@@ -22,11 +24,11 @@ struct Args{
     #[arg(long)]
     model_a: PathBuf,
 
-    /// Second model file
+    /// Second model file, for the same game
     #[arg(long)]
     model_b: PathBuf,
 
-    /// Number of games. Colors alternate: A is Black in even-numbered games.
+    /// Number of games. Colors alternate: A moves first in even-numbered games.
     #[arg(long, default_value_t = 20)]
     games: usize,
 
@@ -80,32 +82,41 @@ struct Watch{
     delay: Duration,
 }
 
+// Each model's color, e.g. "A=White B=Black".
+fn colors<G: GridGame>(a_first: bool) -> String{
+    let [first, second] = G::PLAYERS;
+    return if a_first {
+        format!("A={} B={}", first, second)
+    }else{
+        format!("A={} B={}", second, first)
+    };
+}
+
 // Plays one game. Returns the result and the number of plies.
 // With `watch`, prints the board after every move.
-fn play_game(a: &mut Player, b: &mut Player, a_is_black: bool, temp_moves: usize,
-             watch: Option<&Watch>)
-    -> (Outcome, usize, MiniPenteState)
+fn play_game<G: GridGame>(a: &mut Player, b: &mut Player, a_first: bool, temp_moves: usize,
+                         watch: Option<&Watch>)
+    -> (Outcome, usize, G)
 {
     let dhp = DirichletHParams{ epsilon: 0.0, ..Default::default() };
-    let mut g = MiniPenteState::default();
+    let mut g = G::default();
     let mut ply = 0;
-    // Black moves on even plies.
-    let a_to_move = |ply: usize| (ply % 2 == 0) == a_is_black;
+    // The first player moves on even plies.
+    let a_to_move = |ply: usize| (ply % 2 == 0) == a_first;
     if let Some(w) = watch{
-        let colors = if a_is_black { "A=Black B=White" } else { "A=White B=Black" };
-        println!("===== game {} ({}) =====\n{}", w.game, colors, g);
+        println!("===== game {} ({}) =====\n{}", w.game, colors::<G>(a_first), g);
     }
     while !g.is_terminal(){
         let a_moves = a_to_move(ply);
         let p = if a_moves { &mut *a } else { &mut *b };
-        let mover = format!("{} ({})", if a_moves { "A" } else { "B" }, g.active_plyr_str());
+        let mover = format!("{} ({})", if a_moves { "A" } else { "B" }, g.active_player());
         let (post, val) = mcts(&g, &mut p.eval, p.rollouts, &dhp);
         let sampled = ply < temp_moves;
         let action = select_action(&post, !sampled);
         g.apply_action(action);
         ply += 1;
         if let Some(w) = watch{
-            let (row, col) = action_2_coord(action);
+            let (row, col) = G::action_coord(action);
             println!("ply {}: {} plays ({}, {}){}  eval for {}: {:+.2}  visits {:.0}%",
                      ply, mover, row, col, if sampled { " [sampled]" } else { "" },
                      mover, val, 100.0 * post[action]);
@@ -127,8 +138,8 @@ fn play_game(a: &mut Player, b: &mut Player, a_is_black: bool, temp_moves: usize
     return (result, ply, g);
 }
 
-fn load(p: &PathBuf, device: &Device) -> Tard{
-    let (t, net) = load_model::<MiniPenteState>(p, device).unwrap_or_else(|e|{
+fn load<G: GridGame>(p: &PathBuf, device: &Device) -> Tard{
+    let (t, net) = load_model::<G>(p, device).unwrap_or_else(|e|{
         panic!("Failed to load model {}: {}", p.display(), e)
     });
     info!("{}: {:?}", p.display(), net);
@@ -150,11 +161,24 @@ fn main(){
     assert!(args.games > 0, "--games must be at least 1");
     assert!(args.threads > 0, "--threads must be at least 1");
 
+    // Model B is checked against the same game when it loads.
+    let meta = read_model_meta(&args.model_a).unwrap_or_else(|e|{
+        panic!("Failed to read model {}: {}", args.model_a.display(), e)
+    });
+    match meta.game.as_str(){
+        MiniPenteState::NAME => run::<MiniPenteState>(&args),
+        PenteState::NAME => run::<PenteState>(&args),
+        other => panic!("Model {} is for game '{}', which the arena can't play", args.model_a.display(), other),
+    }
+}
+
+fn run<G: GridGame>(args: &Args){
     let device = Device::default();
-    let tard_a = load(&args.model_a, &device);
-    let tard_b = load(&args.model_b, &device);
+    let tard_a = load::<G>(&args.model_a, &device);
+    let tard_b = load::<G>(&args.model_b, &device);
     let rollouts_a = args.rollouts_a.unwrap_or(args.rollouts);
     let rollouts_b = args.rollouts_b.unwrap_or(args.rollouts);
+    println!("Game: {}", G::NAME);
     println!("A: {} ({} rollouts)", args.model_a.display(), rollouts_a);
     println!("B: {} ({} rollouts)", args.model_b.display(), rollouts_b);
     // Watching interleaves boards from concurrent games, so play one at a time.
@@ -163,33 +187,32 @@ fn main(){
              args.games, args.temp_moves, threads);
 
     let next_game = AtomicUsize::new(0);
-    // (game index, a_is_black, result, plies)
+    // (game index, a_first, result, plies)
     let results = Mutex::new(Vec::new());
     std::thread::scope(|s|{
         for _ in 0..threads.min(args.games){
             let mut a = Player{ eval: TardEvaluator::new(&tard_a), rollouts: rollouts_a };
             let mut b = Player{ eval: TardEvaluator::new(&tard_b), rollouts: rollouts_b };
-            let (next_game, results, args) = (&next_game, &results, &args);
+            let (next_game, results) = (&next_game, &results);
             s.spawn(move ||{
                 loop{
                     let i = next_game.fetch_add(1, Ordering::Relaxed);
                     if i >= args.games{
                         break;
                     }
-                    let a_is_black = i % 2 == 0;
+                    let a_first = i % 2 == 0;
                     let watch = Watch{ game: i, delay: Duration::from_millis(args.delay_ms) };
                     let watch = args.watch.then_some(&watch);
-                    let (r, plies, g) = play_game(&mut a, &mut b, a_is_black, args.temp_moves, watch);
-                    let colors = if a_is_black { "A=Black B=White" } else { "A=White B=Black" };
+                    let (r, plies, g) = play_game::<G>(&mut a, &mut b, a_first, args.temp_moves, watch);
                     let outcome = match r{
                         Outcome::AWins => "A wins",
                         Outcome::BWins => "B wins",
                         Outcome::Draw => "draw",
                     };
                     let mut res = results.lock().unwrap();
-                    res.push((i, a_is_black, r, plies));
+                    res.push((i, a_first, r, plies));
                     println!("game {:>3} ({}): {:<6} in {} plies  [{}/{} done]",
-                             i, colors, outcome, plies, res.len(), args.games);
+                             i, colors::<G>(a_first), outcome, plies, res.len(), args.games);
                     if args.show && !args.watch{
                         println!("{}", g);
                     }
@@ -203,18 +226,20 @@ fn main(){
     let a_wins = count(&|x| x.2 == Outcome::AWins);
     let b_wins = count(&|x| x.2 == Outcome::BWins);
     let draws = count(&|x| x.2 == Outcome::Draw);
-    let a_black_wins = count(&|x| x.1 && x.2 == Outcome::AWins);
-    let a_white_wins = count(&|x| !x.1 && x.2 == Outcome::AWins);
-    let a_black_games = count(&|x| x.1);
-    let a_white_games = res.len() - a_black_games;
-    let black_wins = count(&|x| (x.1 && x.2 == Outcome::AWins) || (!x.1 && x.2 == Outcome::BWins));
+    let a_first_wins = count(&|x| x.1 && x.2 == Outcome::AWins);
+    let a_second_wins = count(&|x| !x.1 && x.2 == Outcome::AWins);
+    let a_first_games = count(&|x| x.1);
+    let a_second_games = res.len() - a_first_games;
+    let first_player_wins = count(&|x| (x.1 && x.2 == Outcome::AWins) || (!x.1 && x.2 == Outcome::BWins));
     let mean_plies = res.iter().map(|x| x.3).sum::<usize>() as f64 / res.len() as f64;
+    let [first, second] = G::PLAYERS;
 
     let n = res.len() as f64;
     let score = (a_wins as f64 + 0.5 * draws as f64) / n;
     println!("\nA {} - B {} - draws {}  (A scores {:.1}%)", a_wins, b_wins, draws, 100.0 * score);
-    println!("A won {}/{} as Black, {}/{} as White", a_black_wins, a_black_games, a_white_wins, a_white_games);
-    println!("Black won {}/{} games; mean game length {:.1} plies", black_wins, res.len(), mean_plies);
+    println!("A won {}/{} as {}, {}/{} as {}", a_first_wins, a_first_games, first, a_second_wins, a_second_games, second);
+    println!("{} (moves first) won {}/{} games; mean game length {:.1} plies",
+             first, first_player_wins, res.len(), mean_plies);
     if score > 0.0 && score < 1.0{
         // Standard error of the score, from the per-game results.
         let var = res.iter().map(|x|{

@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use tard::gamestate::GameState;
 use tard::minipente::{self, MiniPenteState};
+use tard::pente::{self, PenteState};
 use tard::engine::*;
 use tard::evaluator::{BatchedBackend, ReplicatedBackend};
 use tard::selfplay::{SelfPlaySource, SingleThreaded, WorkerPool};
@@ -39,8 +40,11 @@ use tard::tard::*;
 #[derive(Copy, Clone, Debug, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Game{
+    /// Pente on a 9x9 board, no opening restrictions
     #[value(name = "minipente")]
     MiniPente,
+    /// Official Pente: 19x19, White first, tournament opening rule
+    Pente,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum, Serialize)]
@@ -91,15 +95,15 @@ struct Args{
     // A resumed model keeps the size saved with it; passing a value that
     // disagrees with it is an error.
 
-    /// Channels in the conv trunk [default: the game's default, 64 for MiniPente]
+    /// Channels in the conv trunk [default: the game's default: 64 for MiniPente, 128 for Pente]
     #[arg(long)]
     channels: Option<usize>,
 
-    /// Residual blocks in the trunk [default: the game's default, 6 for MiniPente]
+    /// Residual blocks in the trunk [default: the game's default: 6 for MiniPente, 10 for Pente]
     #[arg(long)]
     blocks: Option<usize>,
 
-    /// Hidden units in the value head [default: the game's default, 64 for MiniPente]
+    /// Hidden units in the value head [default: the game's default: 64 for MiniPente, 128 for Pente]
     #[arg(long)]
     value_hidden: Option<usize>,
 
@@ -180,6 +184,7 @@ fn main(){
         .init();
     match args.game{
         Game::MiniPente => train_tard::<MiniPenteState>(&args, minipente::default_net_config()),
+        Game::Pente => train_tard::<PenteState>(&args, pente::default_net_config()),
     }
 }
 

@@ -33,3 +33,20 @@ pub trait GameState: Default + Clone + fmt::Display + Debug + Send + 'static{
     // game ends when current player has no moves (draw or checkmated). 
     fn get_terminal_value(&self) -> f32;
 }
+
+// What the terminal bins (inference, arena, interactive) need beyond
+// GameState: games whose moves are typed as a (row, col) point.
+pub trait GridGame: GameState{
+    // Names of the first and second player, e.g. ["Black", "White"].
+    const PLAYERS: [&'static str; 2];
+
+    // Name of the player to move.
+    fn active_player(&self) -> &'static str;
+
+    // Plays at (row, col). Returns false, changing nothing, if that isn't a
+    // legal move (including off the board).
+    fn play_at(&mut self, row: usize, col: usize) -> bool;
+
+    // The (row, col) point an action plays at.
+    fn action_coord(action: Action) -> (usize, usize);
+}

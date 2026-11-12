@@ -458,7 +458,8 @@ impl Display for DirichletHParams{
 #[cfg(test)]
 mod tests{
     use super::*;
-    use crate::minipente::{MiniPenteState, coord_2_action};
+    use crate::minipente::{self, MiniPenteState};
+    use crate::pente::{self, PenteState};
 
     // Uniform-policy, zero-value evaluator that counts its calls.
     struct Counting{ n: usize }
@@ -546,7 +547,7 @@ mod tests{
         let g = position(&[(0, 0), (8, 0), (0, 1), (8, 2), (0, 2), (8, 4), (0, 3), (8, 6)]);
         assert!(g.is_black());
         let (post, _) = mcts(&g, &mut NullEvaluator{}, 400, &DirichletHParams::default());
-        let win = coord_2_action(0, 4);
+        let win = minipente::coord_2_action(0, 4);
         assert_eq!(select_action(&post, true), win);
         assert!(post[win] > 0.5, "winning move got only {} of the visits", post[win]);
     }
@@ -642,6 +643,24 @@ mod tests{
             for spe in &game{
                 assert_distribution(&spe.mcts_post);
             }
+        }
+    }
+
+    #[test]
+    fn pente_self_play_follows_the_tournament_rule(){
+        // Root noise is skipped for the forced first move (one legal child).
+        let game = run_self_play::<PenteState>(&mut NullEvaluator{}, 8, &noise(), 4);
+        assert!(game.len() >= 3);
+        assert_eq!(game[0].mcts_post[pente::coord_2_action(9, 9)], 1.0,
+                   "the first stone must go on the center");
+        for r in 7..=11{
+            for c in 7..=11{
+                assert_eq!(game[2].mcts_post[pente::coord_2_action(r, c)], 0.0,
+                           "first player's second stone inside the central 5x5 at ({r}, {c})");
+            }
+        }
+        for spe in &game{
+            assert_distribution(&spe.mcts_post);
         }
     }
 

@@ -4,7 +4,7 @@
 use std::{fmt};
 use tracing::trace;
 
-use crate::gamestate::GameState;
+use crate::gamestate::{Action, GameState, GridGame};
 use crate::tard::NetConfig;
 
 pub const ROWS: usize = 9;
@@ -266,6 +266,23 @@ pub fn action_2_coord(action: usize) -> (usize, usize){
     (row, col)
 }
 
+
+
+impl GridGame for MiniPenteState{
+    const PLAYERS: [&'static str; 2] = ["Black", "White"];
+
+    fn active_player(&self) -> &'static str{
+        return if self.is_black_ {"Black"} else {"White"};
+    }
+
+    fn play_at(&mut self, row: usize, col: usize) -> bool{
+        return self.play(row, col);
+    }
+
+    fn action_coord(action: Action) -> (usize, usize){
+        return action_2_coord(action);
+    }
+}
 
 
 impl fmt::Display for MiniPenteState {
