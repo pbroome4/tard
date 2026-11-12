@@ -81,21 +81,15 @@ struct Args{
     #[arg(long, default_value_t = 1024)]
     eval_batch_size: usize,
 
-    /// Initial weights to train from, starting at step 0 with a fresh
-    /// optimizer. If the file doesn't exist, training starts from a freshly
-    /// initialized model. To continue a run, use --resume instead.
-    #[arg(long, default_value = "model.bpk")]
-    model: PathBuf,
-
     /// Checkpoint directory to continue a run from
     /// (`<run>/checkpoints/step_<N>`): restores the weights, the optimizer
-    /// state, and step N.
-    #[arg(long, conflicts_with = "model")]
+    /// state, and step N. Without it, training starts from a fresh network.
+    #[arg(long)]
     resume: Option<PathBuf>,
 
     // ---- Network size (only for a freshly initialized network) ----
-    // A loaded model (--model/--resume) keeps the size saved with it; passing
-    // a value that disagrees with it is an error.
+    // A resumed model keeps the size saved with it; passing a value that
+    // disagrees with it is an error.
 
     /// Channels in the conv trunk [default: the game's default, 64 for Pente]
     #[arg(long)]
@@ -235,17 +229,12 @@ fn train_tard<G: GameState>(args: &Args, default_net: NetConfig){
         }
         info!("Replay buffer is not persisted and will refill from self-play.");
         loaded
-    }else if args.model.exists(){
-        info!("Starting from weights {} at step 0", args.model.display());
-        load_model::<G>(&args.model, &device).unwrap_or_else(|e|{
-            panic!("Failed to load model {}: {}", args.model.display(), e)
-        })
     }else{
-        info!("No model at {}, creating fresh instance", args.model.display());
+        info!("No --resume given; creating a fresh network");
         let net = args.net_config(default_net);
         (Tard::for_game::<G>(&net, &device), net)
     };
-    // A loaded model's saved size wins; flags may only restate it.
+    // A resumed model's saved size wins; flags may only restate it.
     let requested = args.net_config(net);
     if requested != net{
         panic!("Network-size flags ask for {:?}, but the loaded model is {:?}. \
@@ -253,8 +242,8 @@ fn train_tard<G: GameState>(args: &Args, default_net: NetConfig){
     }
     info!("Network: {:?}", net);
     debug!("{}", tard);
-    // Created only after loading succeeds, so a bad --resume/--model
-    // doesn't leave an empty run directory behind.
+    // Created only after loading succeeds, so a bad --resume doesn't leave
+    // an empty run directory behind.
     let config_json = serde_json::to_string_pretty(args).expect("Unable to serialize config");
     let mut om = OutputManager::new(&args.output_dir, &config_json).unwrap();
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);

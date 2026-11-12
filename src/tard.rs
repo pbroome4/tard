@@ -23,13 +23,6 @@ pub struct NetConfig{
     pub value_hidden: usize, // hidden units in the value head
 }
 
-impl Default for NetConfig{
-    // The size every model was trained with before NetConfig existed; used
-    // when loading a model file that has no NetConfig sidecar.
-    fn default() -> Self{
-        return Self{ channels: 128, blocks: 10, value_hidden: 128 };
-    }
-}
 
 #[derive(Debug, Module)]
 pub struct Tard{

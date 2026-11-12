@@ -319,14 +319,6 @@ mod tests{
     }
 
     #[test]
-    fn default_net_config_is_smaller_than_the_legacy_size(){
-        assert_eq!(default_net_config(), NetConfig{ channels: 64, blocks: 6, value_hidden: 64 });
-        // Fresh models now differ from NetConfig::default(), which must stay
-        // at the size older sidecar-less model files were trained with.
-        assert_eq!(NetConfig::default(), NetConfig{ channels: 128, blocks: 10, value_hidden: 128 });
-    }
-
-    #[test]
     fn new_game_is_empty_with_black_to_move(){
         let s = PenteState::new();
         assert!(s.is_black());

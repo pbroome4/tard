@@ -242,10 +242,7 @@ pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
 /// `{"game": "pente", "channels": 128, "blocks": 10, "value_hidden": 128}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelMeta{
-    // None for sidecars written before the game was recorded; those were
-    // all Pente, the only game at the time.
-    #[serde(default)]
-    pub game: Option<String>,
+    pub game: String, // GameState::NAME
     #[serde(flatten)]
     pub net: NetConfig,
 }
@@ -261,36 +258,32 @@ pub fn write_model_meta(model: &Path, meta: &ModelMeta) -> Result<(), Box<dyn Er
     return Ok(());
 }
 
-/// Reads the sidecar saved next to `model`. Model files from before
-/// sidecars existed have none; they are all default-sized Pente models
-/// (reported as game None, which any game accepts; see check_game).
+/// Reads the sidecar saved next to `model`. It is required: without it
+/// there's no way to know the network's shape.
 pub fn read_model_meta(model: &Path) -> Result<ModelMeta, Box<dyn Error>>{
     let p = model_meta_path(model);
-    if !p.exists(){
-        info!("No {} found; assuming the default network size", p.display());
-        return Ok(ModelMeta{ game: None, net: NetConfig::default() });
-    }
-    return Ok(serde_json::from_str(&fs::read_to_string(&p)?)?);
+    let json = fs::read_to_string(&p)
+        .map_err(|e| format!("can't read model sidecar {}: {}", p.display(), e))?;
+    return Ok(serde_json::from_str(&json)?);
 }
 
 /// Errors if `meta` records a game other than G.
 pub fn check_game<G: GameState>(meta: &ModelMeta) -> Result<(), Box<dyn Error>>{
-    match &meta.game{
-        Some(game) if game != G::NAME =>
-            Err(format!("model was trained for game '{}', not '{}'", game, G::NAME).into()),
-        _ => Ok(()),
+    if meta.game != G::NAME{
+        return Err(format!("model was trained for game '{}', not '{}'", meta.game, G::NAME).into());
     }
+    return Ok(());
 }
 
 /// Saves the weights to `path` and their game and network size next to them.
 pub fn save_model<G: GameState>(tard: &Tard, net: &NetConfig, path: &Path) -> Result<(), Box<dyn Error>>{
     tard.clone().save_file(path)?;
-    write_model_meta(path, &ModelMeta{ game: Some(G::NAME.to_string()), net: *net })?;
+    write_model_meta(path, &ModelMeta{ game: G::NAME.to_string(), net: *net })?;
     return Ok(());
 }
 
-/// Loads a model saved by save_model (or an older model file without a
-/// sidecar) into a network for game G. Returns the network and its size.
+/// Loads a model saved by save_model into a network for game G.
+/// Returns the network and its size.
 pub fn load_model<G: GameState>(p: &Path, device: &Device) -> Result<(Tard, NetConfig), Box<dyn Error>>{
     let meta = read_model_meta(p)?;
     check_game::<G>(&meta)?;
@@ -419,32 +412,34 @@ mod tests{
     }
 
     #[test]
-    fn model_meta_roundtrips_and_defaults_when_missing(){
+    fn model_meta_roundtrips_and_is_required(){
         let d = scratch_dir("netcfg");
         let model = d.join("model.bpk");
-        assert_eq!(read_model_meta(&model).unwrap(), ModelMeta{ game: None, net: NetConfig::default() });
+        assert!(read_model_meta(&model).is_err(), "a missing sidecar is an error");
         let meta = ModelMeta{
-            game: Some("pente".to_string()),
+            game: "pente".to_string(),
             net: NetConfig{ channels: 64, blocks: 6, value_hidden: 32 },
         };
         write_model_meta(&model, &meta).unwrap();
         assert_eq!(read_model_meta(&model).unwrap(), meta);
-        // The format is flat, so sidecars written before the game was
-        // recorded still parse.
+        // Flat JSON; every field is required.
+        let json = fs::read_to_string(model_meta_path(&model)).unwrap();
+        assert!(json.contains("\"game\": \"pente\"") && json.contains("\"channels\": 64"));
         fs::write(model_meta_path(&model), r#"{"channels": 32, "blocks": 2, "value_hidden": 16}"#).unwrap();
-        assert_eq!(read_model_meta(&model).unwrap(),
-                   ModelMeta{ game: None, net: NetConfig{ channels: 32, blocks: 2, value_hidden: 16 } });
+        assert!(read_model_meta(&model).is_err(), "the game field is required");
         fs::write(model_meta_path(&model), "not json").unwrap();
-        assert!(read_model_meta(&model).is_err(), "a corrupt sidecar must not silently fall back");
+        assert!(read_model_meta(&model).is_err());
         fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
     fn check_game_rejects_a_model_for_another_game(){
-        let meta = |game: Option<&str>| ModelMeta{ game: game.map(String::from), net: NetConfig::default() };
-        assert!(check_game::<PenteState>(&meta(Some("pente"))).is_ok());
-        assert!(check_game::<PenteState>(&meta(None)).is_ok(), "older sidecars have no game");
-        let err = check_game::<PenteState>(&meta(Some("connect4"))).unwrap_err();
+        let meta = |game: &str| ModelMeta{
+            game: game.to_string(),
+            net: NetConfig{ channels: 64, blocks: 6, value_hidden: 64 },
+        };
+        assert!(check_game::<PenteState>(&meta("pente")).is_ok());
+        let err = check_game::<PenteState>(&meta("connect4")).unwrap_err();
         assert!(err.to_string().contains("connect4"));
     }
 
