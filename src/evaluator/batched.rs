@@ -8,6 +8,7 @@
 // server thread, so every client always uses the server's current model.
 
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::thread::{self, JoinHandle};
 use burn::tensor::{Device, Tensor, TensorData};
 use burn::module::Module;
@@ -20,31 +21,39 @@ use crate::utils::*;
 use super::{Evaluator, EvalBackend};
 
 
+// The client encodes the state and legalizes the returned policy itself, so
+// that per-position CPU work runs in parallel on the worker threads rather
+// than serially on the server thread.
 #[derive(Debug, Clone)]
-pub struct BatchedClient<G>{
-    s_eval: Sender<EvalRequest<G>>
+pub struct BatchedClient{
+    s_eval: Sender<EvalRequest>
 }
 
-impl <G:GameState> Evaluator<G> for BatchedClient<G>{
+impl <G:GameState> Evaluator<G> for BatchedClient{
     fn evaluate(&mut self, g: &G) -> (Vec<f32>, f32){
+        // A fresh one-shot channel per request (rather than one reused per
+        // client) means the only sender lives in the request: if the server
+        // panics, the request is dropped and recv() fails instead of
+        // blocking forever.
         let (s,r) = crossbeam::channel::bounded(1);
         let req = EvalRequest{
-            g: g.clone(),
+            input: g.to_tensor(),
             resp_chan: s
         };
         self.s_eval.send(req)
             .expect("Batched eval server is gone (it likely panicked; see its error)");
         let resp = r.recv()
             .expect("Batched eval server dropped the request (it likely panicked; see its error)");
-        return (resp.p, resp.v);
+        return (legalize_policy(resp.p, g), resp.v);
     }
 }
 
 
 pub struct BatchedBackend<G>{
     s_update: Sender<Tard>,
-    s_eval:  Sender<EvalRequest<G>>,
+    s_eval:  Sender<EvalRequest>,
     server: Option<JoinHandle<()>>,
+    _marker: PhantomData<fn() -> G>,
 }
 
 impl <G:GameState> BatchedBackend<G>{
@@ -61,6 +70,7 @@ impl <G:GameState> BatchedBackend<G>{
             s_update: s_u,
             s_eval: s_e,
             server: Some(server),
+            _marker: PhantomData,
         };
         EvalBackend::<G>::update(&mut slf, t);
         return slf;
@@ -68,9 +78,9 @@ impl <G:GameState> BatchedBackend<G>{
 }
 
 impl <G:GameState> EvalBackend<G> for BatchedBackend<G>{
-    type Client = BatchedClient<G>;
+    type Client = BatchedClient;
 
-    fn client(&mut self) -> BatchedClient<G>{
+    fn client(&mut self) -> BatchedClient{
         return BatchedClient{s_eval: self.s_eval.clone()};
     }
 
@@ -93,7 +103,7 @@ impl <G:GameState> EvalBackend<G> for BatchedBackend<G>{
 // the request channel (backend and all clients dropped) disconnects.
 fn run_server<G:GameState>(
     r_u: Receiver<Tard>,
-    r_e: Receiver<EvalRequest<G>>,
+    r_e: Receiver<EvalRequest>,
     max_batch_size: usize)
 {
     info!("Batched eval server starting, awaiting Tard");
@@ -105,7 +115,7 @@ fn run_server<G:GameState>(
                   .into_iter()
                   .next()
                   .unwrap();
-    let mut q = VecDeque::<EvalRequest<G>>::new();
+    let mut q = VecDeque::<EvalRequest>::new();
     let mut is_running = true;
     while is_running{
         trace!("Checking for Tard updates");
@@ -121,27 +131,22 @@ fn run_server<G:GameState>(
         if q.len() > 0{
             let batch_size = std::cmp::min(q.len(), max_batch_size);
             trace!("Computing batch of size {}", batch_size);
-            let b_tens = batch_eval_tensor(&q, &device, batch_size);
+            let b_tens = batch_eval_tensor::<G>(&q, &device, batch_size);
             let (p_batch, v_batch) = t.forward(b_tens);
-            let mut p_batch_vec = p_batch.exp()
-                                         .into_data()
-                                         .try_into_vec::<f32>()
-                                         .unwrap();
-            let mut v_batch_vec = v_batch.into_data()
-                                         .try_into_vec::<f32>()
-                                         .unwrap();
-            // count backward because efficient to delete from end of vector
-            for i in (0..batch_size).rev(){
-                let p = p_batch_vec.split_off(p_batch_vec.len() - G::ACTN_SPC_SIZE);
-                let p = legalize_policy(p, &q[i].g);
-                let v = v_batch_vec.pop().unwrap();
-                trace!("Batch element {}/{} has p: {:?}, v: {}",
-                        i+1, batch_size, &p, &v);
-                if let Err(x) = q[i].resp_chan.send(EvalResponse{p, v}){
+            let p_batch_vec = p_batch.exp()
+                                     .into_data()
+                                     .try_into_vec::<f32>()
+                                     .unwrap();
+            let v_batch_vec = v_batch.into_data()
+                                     .try_into_vec::<f32>()
+                                     .unwrap();
+            let responses = p_batch_vec.chunks_exact(G::ACTN_SPC_SIZE).zip(v_batch_vec);
+            for (req, (p, v)) in q.drain(0..batch_size).zip(responses){
+                trace!("Batch element has p: {:?}, v: {}", p, v);
+                if let Err(x) = req.resp_chan.send(EvalResponse{p: p.to_vec(), v}){
                     warn!("Batched eval response failed to send: {}", x);
                 }
             }
-            q.drain(0..batch_size);
         }
     }
     debug!("Batched eval server shutting down");
@@ -168,14 +173,15 @@ fn check_for_model_update(r_tard: &Receiver<Tard>, t_in: Tard) -> (Tard, bool){
     }
 }
 
+// Stacks the first batch_size requests' encoded states into one input tensor.
 fn batch_eval_tensor <G:GameState>(
-    q: &VecDeque<EvalRequest<G>>,
+    q: &VecDeque<EvalRequest>,
     device: &Device,
     batch_size: usize
 ) -> Tensor<4>{
     let mut v = Vec::with_capacity(batch_size * G::N_CHAN * G::ROWS * G::COLS);
-    for i in 0..batch_size{
-        v.extend_from_slice(&q[i].g.to_tensor());
+    for req in q.iter().take(batch_size){
+        v.extend_from_slice(&req.input);
     }
     let td = TensorData::new(v, [batch_size, G::N_CHAN, G::ROWS, G::COLS]);
     return Tensor::<4>::from_data(td, device);
@@ -189,9 +195,9 @@ fn batch_eval_tensor <G:GameState>(
 // Returns
 //      Number of elements read into queue.
 //      is_connected
-fn read_queue<G:GameState>(
-    r: &Receiver<EvalRequest<G>>,
-    q: &mut VecDeque<EvalRequest<G>>) -> (usize, bool)
+fn read_queue(
+    r: &Receiver<EvalRequest>,
+    q: &mut VecDeque<EvalRequest>) -> (usize, bool)
 {
     let n = q.len();
     let mut is_connected = true;
@@ -224,7 +230,7 @@ struct EvalResponse{
 }
 
 #[derive(Debug)]
-struct EvalRequest<G>{
-    g: G,
+struct EvalRequest{
+    input: Vec<f32>,                   // GameState::to_tensor() of the position
     resp_chan: Sender<EvalResponse>    // one-shot response channel
 }

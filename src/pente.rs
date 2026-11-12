@@ -12,7 +12,13 @@ pub enum Piece{
     Empty = 0,
     Black = 1,
     White = 2,
-    Sentinel = 3, 
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Status{
+    Ongoing,
+    Won(Piece), // Winner's color
+    Draw,
 }
 
 #[derive(Clone, Debug)]
@@ -24,9 +30,7 @@ pub struct PenteState{
     num_pieces_: usize, // Number of pieces actively on the board.
                         // Is redundant, since we could loop over board,
                         // but maintined to minimize computation
-    is_terminal_: Piece, // Empty is non-terminal.
-                         // Colored Piece is terminal winners color.
-                         // Sentinel is draw.
+    status_: Status,
 }
 
 impl Default for PenteState{
@@ -68,14 +72,8 @@ impl GameState for PenteState{
         return a;
     }
 
-    fn legal_actions_mask(&self) -> Vec<f32> {
-        let mut v = vec![0.0; Self::ACTN_SPC_SIZE];
-        for i in 0..Self::ACTN_SPC_SIZE{
-            if self.is_legal_action(i){
-                v[i] = 1.0;
-            }
-        }
-        return v;
+    fn legal_actions_mask(&self) -> Vec<bool> {
+        return (0..Self::ACTN_SPC_SIZE).map(|i| self.is_legal_action(i)).collect();
     }
     
     fn apply_action(&mut self, action: usize){
@@ -91,26 +89,26 @@ impl GameState for PenteState{
         self.num_pieces_ += 1;
         self.update_captures(row, col);
         if self.b_caps_ >= 5 || self.w_caps_ >= 5 || self.is_con5(row,col){
-            self.is_terminal_ = self.get_active_piece()
+            self.status_ = Status::Won(self.get_active_piece());
         }else if self.num_pieces_ == PenteState::ROWS * PenteState::COLS{
-            self.is_terminal_ = Piece::Sentinel;
+            self.status_ = Status::Draw;
         }
         self.is_black_ = !self.is_black_;
     }
     
     fn is_terminal(&self) -> bool{
-        return self.is_terminal_ != Piece::Empty;
+        return self.status_ != Status::Ongoing;
     }
     
 
     // In Pente the player who just moved is the one who can win, so this is
     // never +1: it's -1 (side to move lost) or 0 (draw).
-    fn get_terminal_value(&self) -> i32{
-        assert!(self.is_terminal(), "get_terminal_value called on a non-terminal state\n{}", self);
-        if self.is_terminal_ == Piece::Sentinel{
-            return 0;
+    fn get_terminal_value(&self) -> f32{
+        match self.status_{
+            Status::Won(_) => -1.0,
+            Status::Draw => 0.0,
+            Status::Ongoing => panic!("get_terminal_value called on a non-terminal state\n{}", self),
         }
-        return -1;
     }
 }
 
@@ -124,7 +122,7 @@ impl PenteState{
             w_caps_:  0,
             is_black_: true,
             num_pieces_: 0,
-            is_terminal_: Piece::Empty,
+            status_: Status::Ongoing,
         }
     }
 

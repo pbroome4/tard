@@ -6,6 +6,7 @@ use rand::distr::weighted::WeightedIndex;
 use tracing::{trace, debug, info};
 use std::fmt::Display;
 use std::{fmt, vec};
+use std::ops::{Index, IndexMut};
 use rand;
 use rand_distr::multi::Dirichlet;
 
@@ -22,8 +23,7 @@ pub fn inference <G: GameState>(
 {   
     let dhp = DirichletHParams::default();
     let (mcts_post, val_post) = mcts(g, eval, num_rollouts, &dhp);
-    let mcts_prob = exp(&mcts_post);
-    let action = select_action(&mcts_prob, true);
+    let action = select_action(&mcts_post, true);
     debug!("Current eval: {}", val_post);
     return (action, val_post);
 }
@@ -43,9 +43,8 @@ pub fn run_self_play <G: GameState>(
         debug!("Current State: \n{}", g);
         debug!("Computing self-play move#: {}", move_n);
         let (mcts_post, val_post) = mcts(&g, eval, num_sims, dhp);
-        let mcts_prob = exp(&mcts_post);
         // Sample for the first temp_moves plies (opening variety), then play greedily.
-        let action = select_action(&mcts_prob, move_n >= temp_moves);
+        let action = select_action(&mcts_post, move_n >= temp_moves);
         let sp_element = SelfPlayElement{
             g: g.clone(),
             mcts_post: mcts_post,
@@ -57,7 +56,7 @@ pub fn run_self_play <G: GameState>(
         move_n += 1;
     }
     debug!("Current State: \n{}", g);
-    let outcome = g.get_terminal_value() as f32;
+    let outcome = g.get_terminal_value();
     // sp_vec has list of all non-terminal states.
     // outcome is relative to terminal state. So we iterate
     // in reverse and polarity starts at -1.0
@@ -97,7 +96,9 @@ pub struct SelfPlayElement<G:GameState>{
 
 
 // Run MCTS from the current state. State must be non-terminal. num sims >= 1.
-// Returns log probabiltiy posterior.
+// Returns (posterior, value): the posterior is a probability distribution
+// over actions (share of root visits), the value is the root's mean value
+// from the side-to-move's perspective.
 pub fn mcts <G: GameState> (
     state: &G,
     eval: &mut impl Evaluator<G>,
@@ -109,14 +110,15 @@ pub fn mcts <G: GameState> (
     for _ in 0..num_sims{
         mcts_sim(&mut tree, state, eval, dhp);
     }
-    let root = tree.get(0).unwrap();
+    let root = &tree[0];
     debug!("Mcts root node: {}", root);
     let mcts_pri = mcts_tree_prior(&tree, 0, G::ACTN_SPC_SIZE);
     let mcts_post = mcts_tree_posterior(&tree, 0, G::ACTN_SPC_SIZE);
     let val_post = root.value / root.visits as f32;
-    debug!("total probs should be 1.0. mcts_pri: {}  mcts_post: {}", total_prob(&mcts_pri), total_prob(&mcts_post));
-    debug!("MCTS prior logits: {:?}", &mcts_pri);
-    debug!("MCTS posterior logits:{:?}", &mcts_post);
+    debug!("total probs should be 1.0. mcts_pri: {}  mcts_post: {}",
+           mcts_pri.iter().sum::<f32>(), mcts_post.iter().sum::<f32>());
+    debug!("MCTS prior: {:?}", &mcts_pri);
+    debug!("MCTS posterior: {:?}", &mcts_post);
     debug!("MCTS posterior value: {}", val_post);
     return (mcts_post, val_post);
 }
@@ -133,8 +135,7 @@ fn mcts_sim <G:GameState>
     let mut state = state_orig.clone();
     let mut node_id = 0; // Root
     loop{ // Drill down to a leaf node.
-        let node = tree.get(node_id).unwrap();
-        if node.is_expanded(){
+        if tree[node_id].is_expanded(){
             let (child_id, action) = tree.puct_select(node_id);
             node_id = child_id;
             state.apply_action(action);
@@ -145,7 +146,7 @@ fn mcts_sim <G:GameState>
     // Is leaf node (possibly terminal)
     let value = 
         if state.is_terminal(){
-            state.get_terminal_value() as f32
+            state.get_terminal_value()
         }else{
             tree.expand(node_id, &state, eval, dhp)
         };
@@ -153,39 +154,27 @@ fn mcts_sim <G:GameState>
 }
 
 
-// Returns log mcts posterior probability distributions
-// node_id must be a non-terminal and non-leaf node.
+// Returns the MCTS posterior: each child's share of the visits to its siblings.
+// node_id must be an expanded node. If no child has been visited yet (only one
+// simulation ran) it falls back to the (noised) priors.
 fn mcts_tree_posterior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -> Vec<f32>{
-    let node = tree.get(node_id).unwrap();
     let mut p = vec![0.0; actn_spc_size];
     for child_id in tree.children(node_id){
-        let child = tree.get(child_id).unwrap();
-        let action = child.action.unwrap();
-        p[action] = (child.visits as f32) / (node.visits as f32);
+        let child = &tree[child_id];
+        p[child.action.unwrap()] = child.visits as f32;
     }
-    let mut p_sum: f32 = p.iter().sum();
-    if p_sum == 0.0{
-        // No child has been visited yet (only 1 simulation ran):
-        // fall back to the (noised) priors.
-        for child_id in tree.children(node_id){
-            let child = tree.get(child_id).unwrap();
-            p[child.action.unwrap()] = child.prior;
-        }
-        p_sum = p.iter().sum();
+    if p.iter().all(|&x| x == 0.0){
+        return mcts_tree_prior(tree, node_id, actn_spc_size);
     }
-    for e in p.iter_mut(){
-        *e = (*e / p_sum).ln();
-    }
-    return p;
+    return normalize(p);
 }
 
-// Returns log probability
+// Returns the children's prior probabilities (0 for actions with no child).
 fn mcts_tree_prior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -> Vec<f32>{
-    let mut p = vec![f32::NEG_INFINITY; actn_spc_size];
+    let mut p = vec![0.0; actn_spc_size];
     for child_id in tree.children(node_id){
-        let child = tree.get(child_id).unwrap();
-        let action = child.action.unwrap();
-        p[action] = child.prior.ln();
+        let child = &tree[child_id];
+        p[child.action.unwrap()] = child.prior;
     }
     return p;
 }
@@ -235,7 +224,7 @@ impl <'a>Iterator for Children<'a>{
     type Item = NodeId;
     fn next(&mut self) -> Option<Self::Item> {
         let current_id = self.next_id?;
-        self.next_id = self.tree.get(current_id)?.next_sibling;
+        self.next_id = self.tree[current_id].next_sibling;
         return Some(current_id);
     }
 }
@@ -267,58 +256,40 @@ impl MctsTree{
         return x;
     }
     
-    pub fn get(&self, node_id: NodeId) -> Option<&MctsNode>{
-        return self.nodes_.get(node_id);
-    }
-
-    pub fn get_mut(&mut self, node_id: NodeId) -> Option<&mut MctsNode>{
-        return self.nodes_.get_mut(node_id);
-    }
-
-
     fn children(&self, node_id: NodeId) -> Children<'_>{
-        let first_child = self.get(node_id).unwrap().first_child;
-        return Children { tree: &self, next_id: first_child }
+        return Children { tree: self, next_id: self[node_id].first_child }
     }
-    
+
+    // Adds value to node_id and every ancestor, flipping sign each level
+    // because each level is from the other player's perspective.
     fn back_propogate(&mut self, node_id: NodeId, value: f32){
-        let mut curr_id = node_id;
+        let mut curr_id = Some(node_id);
         let mut polarity = 1.0;
-        while let Some(curr) = self.get_mut(curr_id){
+        while let Some(id) = curr_id{
+            let curr = &mut self[id];
             curr.value += value * polarity;
-            polarity *= -1.0;
             curr.visits += 1;
-            if let Some(parent_id) = curr.parent{
-                curr_id = parent_id;
-            }else{
-                break;
-            }
+            polarity *= -1.0;
+            curr_id = curr.parent;
         }
     }
 
-    // Returns probabilistic upper confidence bound applied to trees (PUCT)
-    // and returns best option.
-    // Only call on node_id that have been expanded.
+    // Returns the child of node_id with the highest PUCT score
+    // (probabilistic upper confidence bound applied to trees), and its action.
     // Panics if node_id has no children.
     fn puct_select(&self, node_id:NodeId) -> (NodeId, Action){
-        let mut best_child_id = usize::MAX;
-        let mut best_score = f32::NAN;
-        for child_id in self.children(node_id){
-            let score = self.calc_puct(child_id);
-            if best_score.is_nan() || score > best_score{
-                best_child_id = child_id;
-                best_score = score;
-            }
-        }
-        let action = self.get(best_child_id).unwrap().action.unwrap();
-        return (best_child_id, action);
+        let (best_child_id, _) = self.children(node_id)
+            .map(|id| (id, self.calc_puct(id)))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("puct_select called on a node with no children");
+        return (best_child_id, self[best_child_id].action.unwrap());
     }
 
     // Calculates PUCT score for a given node relative to its parent.
     // Node must have a parent. 
     fn calc_puct(&self, node_id: NodeId) -> f32{
-        let node = self.get(node_id).unwrap();
-        let parent = self.get(node.parent.unwrap()).unwrap();
+        let node = &self[node_id];
+        let parent = &self[node.parent.unwrap()];
         let exploitation_term =
             if node.visits == 0{
                 0.0
@@ -351,7 +322,7 @@ impl MctsTree{
         }
         for action in 0..p.len(){
             // Every legal action gets a child, even if its prior underflowed to 0.
-            if legal_mask[action] != 0.0{
+            if legal_mask[action]{
                 self.add_child(action, node_id, p[action]);
             }
         }
@@ -377,24 +348,17 @@ impl MctsTree{
 
 }
 
-
-// p is (potentailly unormalized) log probabilities.
-// Returns the sum(exp(p));
-fn total_prob(p: &Vec<f32>)->f32{
-    let mut sum = 0.0;
-    for f in p{
-        sum += f.exp();
+impl Index<NodeId> for MctsTree{
+    type Output = MctsNode;
+    fn index(&self, node_id: NodeId) -> &MctsNode{
+        return &self.nodes_[node_id];
     }
-    return sum;
 }
 
-// exponentiate ever element in the vector
-fn exp (v: &Vec<f32>) -> Vec<f32>{
-    let mut o = Vec::with_capacity(v.len());
-    for e in v.iter(){
-        o.push((*e).exp());
+impl IndexMut<NodeId> for MctsTree{
+    fn index_mut(&mut self, node_id: NodeId) -> &mut MctsNode{
+        return &mut self.nodes_[node_id];
     }
-    return o;
 }
 
 
@@ -439,11 +403,11 @@ impl Display for DirichletHParams{
 // a probability distribution over legal actions, so the result still sums to 1.
 // No-op if noise is disabled or there are fewer than 2 legal actions
 // (Dirichlet needs at least 2 components).
-fn add_dirichlet_noise(mut p: Vec<f32>, legal_mask: &[f32], dhp: &DirichletHParams) -> Vec<f32>{
+fn add_dirichlet_noise(mut p: Vec<f32>, legal_mask: &[bool], dhp: &DirichletHParams) -> Vec<f32>{
     if dhp.epsilon == 0.0{
         return p;
     }
-    let legal: Vec<usize> = (0..p.len()).filter(|&i| legal_mask[i] != 0.0).collect();
+    let legal: Vec<usize> = (0..p.len()).filter(|&i| legal_mask[i]).collect();
     if legal.len() < 2{
         return p;
     }

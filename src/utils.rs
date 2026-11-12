@@ -4,14 +4,13 @@ use std::any::Any;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
-use burn::tensor::{Tensor, Device,TensorData};
+use burn::tensor::{Tensor, Device};
 use burn::store::{ModuleRecord, RecordError};
 use burn::module::Module;
 
 use crate::gamestate::GameState;
 use crate::tard::{Tard, TrainingElement};
 use crate::engine::SelfPlayElement;
-use crate::pente::PenteState;
 
 #[derive(Debug)]
 pub struct OutputManager{
@@ -63,14 +62,10 @@ impl OutputManager{
 pub fn selfplay_to_training<G:GameState>(sp_vec: Vec<SelfPlayElement<G>>) -> Vec<TrainingElement>{
     let mut te_vec = Vec::with_capacity(sp_vec.len());
     for spe in sp_vec.into_iter(){
-        let state_td = TensorData::new(spe.g.to_tensor(),
-                                   [G::N_CHAN, G::ROWS, G::COLS]);
-        let mcts_td = TensorData::new(spe.mcts_post, [G::ACTN_SPC_SIZE]);
-        let outcome_td = TensorData::new(vec![spe.outcome], [1]);
         let te = TrainingElement{
-            state: state_td,
-            mcts_posterior: mcts_td,
-            outcome: outcome_td,
+            state: spe.g.to_tensor(),
+            mcts_posterior: spe.mcts_post,
+            outcome: spe.outcome,
         };
         te_vec.push(te);
     }
@@ -147,7 +142,7 @@ pub fn panic_message(payload: &Box<dyn Any + Send>) -> &str{
 pub fn legalize_policy(mut p: Vec<f32>, g: &impl GameState) -> Vec<f32>{
     let legal_mask = g.legal_actions_mask();
     for i in 0..p.len(){
-        if legal_mask[i] == 0.0{
+        if !legal_mask[i]{
             p[i] = 0.0;
         }
     }
@@ -157,7 +152,7 @@ pub fn legalize_policy(mut p: Vec<f32>, g: &impl GameState) -> Vec<f32>{
         // probability. Fall back to uniform over legal moves rather than
         // producing NaNs.
         warn!("Policy has no usable mass over legal moves (sum = {}); using uniform", sum);
-        p = legal_mask;
+        p = legal_mask.iter().map(|&legal| if legal {1.0} else {0.0}).collect();
     }
     return normalize(p);
 }
@@ -174,12 +169,9 @@ pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
 }
 
 
-pub fn load_model(p: &Path, device: &Device) -> Result<Tard, RecordError>{
-    let mut tard = Tard::new(PenteState::N_CHAN,
-                             PenteState::ROWS,
-                             PenteState::COLS,
-                             PenteState::ACTN_SPC_SIZE,
-                             &device);
+// Loads a checkpoint into a network sized for game G.
+pub fn load_model<G: GameState>(p: &Path, device: &Device) -> Result<Tard, RecordError>{
+    let mut tard = Tard::for_game::<G>(device);
     info!("Loading model record: {}", p.display());
     let record = ModuleRecord::load(p)?;
     info!("Loading record into tard");

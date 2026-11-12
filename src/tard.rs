@@ -9,6 +9,12 @@ use bounded_vec_deque::BoundedVecDeque;
 use rand::RngExt;
 
 use crate::tard;
+use crate::gamestate::GameState;
+
+// Network size. Checkpoints only load into a network of the same size.
+pub const TRUNK_CHANNELS: usize = 128; // channels in the conv trunk
+pub const RES_BLOCKS: usize = 10;      // residual blocks in the trunk
+pub const VALUE_HIDDEN: usize = 128;   // hidden units in the value head
 
 
 #[derive(Debug, Module)]
@@ -31,6 +37,11 @@ pub struct Tard{
     value_fc2: Linear,
 }
 impl Tard {
+    // Builds a network sized for game G.
+    pub fn for_game<G: GameState>(device: &Device) -> Self{
+        return Self::new(G::N_CHAN, G::ROWS, G::COLS, G::ACTN_SPC_SIZE, device);
+    }
+
     pub fn new(in_chan: usize,
                rows: usize,
                cols: usize,
@@ -38,23 +49,23 @@ impl Tard {
                device: &Device) -> Self
     {
         info!("Creating Tard in_chan:{}, rows: {},  cols:{}", in_chan, rows, cols);
-        let conv1 = Conv2dConfig::new([in_chan, 128], [3, 3])
+        let conv1 = Conv2dConfig::new([in_chan, TRUNK_CHANNELS], [3, 3])
             .with_padding(nn::PaddingConfig2d::Explicit(1, 1, 1, 1))
             .init(device);
-        let bn1 = BatchNormConfig::new(128).init(device);
+        let bn1 = BatchNormConfig::new(TRUNK_CHANNELS).init(device);
         let mut resnets = Vec::new();
-        for i in 0..10{ // N resnet layers
-            resnets.push(ResNet::new(128, device));
+        for i in 0..RES_BLOCKS{
+            resnets.push(ResNet::new(TRUNK_CHANNELS, device));
         }
 
-        let policy_conv = Conv2dConfig::new([128, 2], [1, 1]).init(device);
+        let policy_conv = Conv2dConfig::new([TRUNK_CHANNELS, 2], [1, 1]).init(device);
         let policy_bn = BatchNormConfig::new(2).init(device);
         let policy_fc = LinearConfig::new(2 * rows * cols, action_space_size).init(device);
 
-        let value_conv = Conv2dConfig::new([128, 1], [1, 1]).init(device);
+        let value_conv = Conv2dConfig::new([TRUNK_CHANNELS, 1], [1, 1]).init(device);
         let value_bn = BatchNormConfig::new(1).init(device);
-        let value_fc1 = LinearConfig::new(rows * cols, 128).init(device);
-        let value_fc2 = LinearConfig::new(128, 1).init(device);
+        let value_fc1 = LinearConfig::new(rows * cols, VALUE_HIDDEN).init(device);
+        let value_fc2 = LinearConfig::new(VALUE_HIDDEN, 1).init(device);
 
         let s = Self {
                 conv1,
@@ -147,9 +158,9 @@ impl ResNet{
 ////// Training structures and Batch Utilities ////
 #[derive(Clone, Debug)]
 pub struct TrainingElement{
-    pub state: TensorData,       // rank 3       
-    pub mcts_posterior: TensorData,  // rank 1
-    pub outcome: TensorData,         // rank 1
+    pub state: Vec<f32>,          // flattened N_CHAN x ROWS x COLS (GameState::to_tensor)
+    pub mcts_posterior: Vec<f32>, // MCTS visit distribution, length ACTN_SPC_SIZE
+    pub outcome: f32,             // game result from the side-to-move's perspective
 }
 
 pub struct TrainingBatch{
@@ -159,27 +170,26 @@ pub struct TrainingBatch{
 }
 
 impl TrainingBatch{
-    pub fn from_training_elements(v: &Vec<TrainingElement>, device: &Device) -> TrainingBatch{
-        let mut states = Vec::with_capacity(v.len());
-        let mut mcts_posteriors = Vec::with_capacity(v.len());
-        let mut outcomes = Vec::with_capacity(v.len());
-        for te in v.into_iter(){
-            let state_tens = Tensor::<3>::from_data(te.state.clone(), device);
-            let mcts_tens = Tensor::<1>::from_data(te.mcts_posterior.clone(), device);
-            let outcome_tens = Tensor::<1>::from_data(te.outcome.clone(), device);
-            states.push(state_tens);
-            mcts_posteriors.push(mcts_tens);
-            outcomes.push(outcome_tens);
+    // Packs the elements into one flat buffer per field, so each field is a
+    // single host-to-device copy.
+    pub fn from_training_elements<G: GameState>(v: &[&TrainingElement], device: &Device) -> TrainingBatch{
+        let n = v.len();
+        let mut states = Vec::with_capacity(n * G::N_CHAN * G::ROWS * G::COLS);
+        let mut mcts_posteriors = Vec::with_capacity(n * G::ACTN_SPC_SIZE);
+        let mut outcomes = Vec::with_capacity(n);
+        for te in v{
+            states.extend_from_slice(&te.state);
+            mcts_posteriors.extend_from_slice(&te.mcts_posterior);
+            outcomes.push(te.outcome);
         }
-        let state_batch = Tensor::stack(states, 0);
-        let mcts_posterior_batch = Tensor::stack(mcts_posteriors, 0);
-        let outcome_batch = Tensor::stack(outcomes, 0);
-        let s = Self{
-                state:state_batch,
-                mcts_posterior:mcts_posterior_batch,
-                outcome:outcome_batch
-            };
-        return s;
+        return Self{
+            state: Tensor::<4>::from_data(
+                TensorData::new(states, [n, G::N_CHAN, G::ROWS, G::COLS]), device),
+            mcts_posterior: Tensor::<2>::from_data(
+                TensorData::new(mcts_posteriors, [n, G::ACTN_SPC_SIZE]), device),
+            outcome: Tensor::<2>::from_data(
+                TensorData::new(outcomes, [n, 1]), device),
+        };
     }
 }
 
@@ -207,30 +217,20 @@ impl std::fmt::Display for TardLoss{
     }
 }
 
-impl Default for TardLoss{
-    fn default() -> Self {
-        return Self {
-            loss: Tensor::from_floats([0.0], &Default::default()),
-            cross_entropy_loss: Tensor::from_floats([0.0], &Default::default()),
-            mse_loss: Tensor::from_floats([0.0], &Default::default())
-        }
-    }
-}
-
-pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> TardLoss{
+pub fn compute_loss<G: GameState>(t: &Tard, v: &[&TrainingElement]) -> TardLoss{
     let device = t.devices().iter().next().unwrap().clone();
-    let mut batch = TrainingBatch::from_training_elements(v, &device);
+    let batch = TrainingBatch::from_training_elements::<G>(v, &device);
     //batch.state = batch.state.autodiff().require_grad();
     //batch.mcts_posterior = batch.mcts_posterior.autodiff().require_grad();
     //batch.outcome = batch.outcome.autodiff().require_grad();
     let (tard_policy_batch, tard_value_batch) = t.forward(batch.state);
     
-    // policy networkloss
-    debug!("mcts_posterior_logits: {}", batch.mcts_posterior);
-    debug!("tard_policy_logits: {}", tard_policy_batch);
-    let mcts_posterior_probs = batch.mcts_posterior.exp();
-    debug_assert!(mcts_posterior_probs.shape() == tard_policy_batch.shape());
-    let cross_entropy_terms = mcts_posterior_probs * tard_policy_batch;
+    // policy network loss: cross-entropy of the policy's log-probs against
+    // the MCTS posterior probabilities
+    debug!("mcts_posterior: {}", batch.mcts_posterior);
+    debug!("tard_policy_log_probs: {}", tard_policy_batch);
+    debug_assert!(batch.mcts_posterior.shape() == tard_policy_batch.shape());
+    let cross_entropy_terms = batch.mcts_posterior * tard_policy_batch;
     let cross_entropy_loss = cross_entropy_terms.sum_dim(1)
                                                 .mean()
                                                 .neg();
@@ -258,19 +258,23 @@ impl TrainingBuffer{
         };
     }
 
-    pub fn sample(&self, size: usize) -> Vec<TrainingElement> {
-        let mut v = Vec::<TrainingElement>::new();
+    // Samples `size` elements uniformly with replacement.
+    // Returns an empty Vec if the buffer is empty.
+    pub fn sample(&self, size: usize) -> Vec<&TrainingElement> {
+        let mut v = Vec::with_capacity(size);
         let l = self.memory_.len();
         if l > 0{
+            let mut rng = rand::rng();
             for _ in 0..size {
-                let i = rand::rng().random_range(0..l);                
-                v.push(self.memory_[i].clone());
+                v.push(&self.memory_[rng.random_range(0..l)]);
             }
         }
         return v;
     }
 
-    pub fn extend_front<I>(&mut self, iter: I)
+    // Appends elements at the back, evicting the oldest from the front
+    // once the buffer is at capacity.
+    pub fn extend<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = TrainingElement>,
     {

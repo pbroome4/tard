@@ -11,8 +11,8 @@ pub trait GameState: Default + Clone + fmt::Display + Debug + Send + 'static{
 
     fn to_tensor(&self) -> Vec<f32>; // flattened N_CHAN x ROWS x COLS
 
-    // usize tensor of 0's and 1's. 0.0=illegal. 1.0=legal
-    fn legal_actions_mask(&self) -> Vec<f32>;
+    // One entry per action (length ACTN_SPC_SIZE): true = legal.
+    fn legal_actions_mask(&self) -> Vec<bool>;
 
     // Generate a random legal action (sampled uniformly)
     // Must only be called in non-terminal state.
@@ -33,5 +33,5 @@ pub trait GameState: Default + Clone + fmt::Display + Debug + Send + 'static{
     //  -1 on Opponent win
     // note for games like chess will always be 0 or -1 because
     // game ends when current player has no moves (draw or checkmated). 
-    fn get_terminal_value(&self) -> i32;     
+    fn get_terminal_value(&self) -> f32;
 }
