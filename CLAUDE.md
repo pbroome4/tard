@@ -10,12 +10,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build --release                      # build (use --release for anything performance-sensitive)
-cargo run --release --bin pentard -- --mode batched   # self-play training (src/main.rs); --mode single|batched|replicated, also --workers, --rollouts, --eval-batch-size, --model, --output-dir
+cargo run --release --bin pentard -- --mode batched   # self-play training (src/main.rs); --mode single|batched|replicated, also --workers, --rollouts, --temp-moves, --eval-batch-size, --model, --start-step, --output-dir
 cargo run --release --bin inference -- --model model.bpk   # play against a trained model (default ./model.bpk)
 cargo run --release --bin interactive      # human-vs-human Pente in the terminal (no AI)
 ```
 
-- Environment (from `commands.txt`): `export CUDA_PATH=/usr/local/cuda`, `RUST_BACKTRACE=1`. burn is built with the `cuda`, `fusion`, and `flex` features; `Device::default()` picks the backend.
+- Environment (from `commands.txt`): `export CUDA_PATH=/usr/local/cuda`, `RUST_BACKTRACE=1`. `CUDA_PATH` must contain `nvvm/libdevice/libdevice.10.bc` or GPU kernels fail to compile at the first tensor readback ("libdevice.10.bc was not found"); on this machine that is `/usr/lib/cuda`, since `/usr/local/cuda` does not exist. burn is built with the `cuda`, `fusion`, and `flex` features; `Device::default()` picks the backend.
 - Logging uses `tracing` with `EnvFilter`; defaults are `warn` globally and `pentard=info`. Override with e.g. `RUST_LOG=pentard=debug`.
 - Profiling: `cargo flamegraph --dev --min-width 0.0 -b pentard` (requires `sudo sysctl -w kernel.perf_event_paranoid=-1` and `kernel.kptr_restrict=0`).
 - There is no test suite. `src/bin/burn_test.rs` and `src/bin/crossbeam_test.rs` are scratch experiments, not tests.
@@ -25,7 +25,7 @@ cargo run --release --bin interactive      # human-vs-human Pente in the termina
 The training loop lives in `src/main.rs` (`train_tard`). Training hyperparameters (batch size, LR schedule, Dirichlet noise) are hardcoded locals at the top of it; mode, worker count, rollouts, starting model, and output directory come from CLI args. At startup, `utils::OutputManager::new(output_dir)` creates a fresh `<output-dir>/run_<unix_seconds>/` directory (it never deletes or reuses earlier runs), and the model is loaded from `--model` if that file exists, otherwise freshly initialized. Each iteration:
 1. Pulls finished games from a `Box<dyn selfplay::SelfPlaySource<G>>` (`next_game`) into a `tard::TrainingBuffer` (bounded replay buffer).
 2. Runs `n_training_steps_per_iter` AdamW steps with cosine-annealed LR.
-3. Pushes new weights back with `source.update_model(&tard)`, saves `<run_dir>/models/model_<step>.bpk`, and appends to `<run_dir>/loss.csv`.
+3. Pushes new weights back with `source.update_model(&tard)`, saves `<run_dir>/models/model_<step>.bpk` plus the AdamW state as `optim_<step>.bpk`, and appends to `<run_dir>/loss.csv`.
 
 Self-play sources (`--mode`), in `src/selfplay.rs`:
 - `SingleThreaded`: runs `engine::run_self_play` inline with a local `TardEvaluator`.
@@ -43,7 +43,7 @@ Key abstractions:
 
 ## Notes
 
-- To resume training from a checkpoint, pass it directly: `--model output/run_<ts>/models/model_<step>.bpk`. If the `--model` file exists but fails to load (corrupt, or the architecture changed), training panics rather than silently starting fresh; if it doesn't exist, training starts from scratch.
+- To resume training from a checkpoint, pass it directly: `--model output/run_<ts>/models/model_<step>.bpk`. The step is parsed from the `model_<N>` filename (override with `--start-step`); a sibling `optim_<N>.bpk` restores the optimizer and the cosine LR schedule is fast-forwarded to step N. The replay buffer is not persisted, so a resumed run re-does the warm-up fill. Training stops at `n_training_steps`. If the `--model` file exists but fails to load (corrupt, or the architecture changed), training panics rather than silently starting fresh; if it doesn't exist, training starts from scratch.
 - Older runs (before per-run directories) left checkpoints directly in `output/models/` and `output/loss.csv`; these are no longer written to.
 - `*.bpk`, `output/`, `*.data`, and `*.svg` are gitignored. Model files and `perf.data` (several GB) live untracked in the repo root.
 - `PenteState::apply_action` panics (`assert!`, in release builds too) on an illegal action. Callers should pick actions from `legal_actions_mask` or check `is_legal_action`; `PenteState::play(row, col)` is the non-panicking variant that returns `false` instead.

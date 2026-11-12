@@ -49,11 +49,11 @@ impl Tard {
 
         let policy_conv = Conv2dConfig::new([128, 2], [1, 1]).init(device);
         let policy_bn = BatchNormConfig::new(2).init(device);
-        let policy_fc = LinearConfig::new(2 * rows * cols, rows * cols).init(device);
+        let policy_fc = LinearConfig::new(2 * rows * cols, action_space_size).init(device);
 
         let value_conv = Conv2dConfig::new([128, 1], [1, 1]).init(device);
         let value_bn = BatchNormConfig::new(1).init(device);
-        let value_fc1 = LinearConfig::new(action_space_size, 128).init(device);
+        let value_fc1 = LinearConfig::new(rows * cols, 128).init(device);
         let value_fc2 = LinearConfig::new(128, 1).init(device);
 
         let s = Self {
@@ -96,6 +96,7 @@ impl Tard {
         let [batch_size, channels, height, width] = v.shape().dims();
         let v = v.reshape([batch_size, channels * height * width]);
         let v = self.value_fc1.forward(v);
+        let v = relu(v);
         let v = self.value_fc2.forward(v);
         let v = tanh(v);
 

@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 use burn::tensor::{Device};
 use burn::optim::{AdamWConfig, GradientsParams};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use pentard::gamestate::GameState;
 use pentard::pente::PenteState;
@@ -57,6 +57,11 @@ struct Args{
     #[arg(long, default_value_t = 800)]
     rollouts: usize,
 
+    /// Self-play samples moves proportionally to MCTS visits for this many
+    /// plies, then plays the most-visited move
+    #[arg(long, default_value_t = 10)]
+    temp_moves: usize,
+
     /// Max batch size for the batched eval server
     #[arg(long, default_value_t = 1024)]
     eval_batch_size: usize,
@@ -70,6 +75,11 @@ struct Args{
     /// `<output-dir>/run_<unix_seconds>/` subdirectory.
     #[arg(long, default_value = "output")]
     output_dir: PathBuf,
+
+    /// Training step to resume from. Defaults to <N> parsed from a
+    /// `model_<N>.bpk` --model filename, else 0.
+    #[arg(long)]
+    start_step: Option<usize>,
 }
 
 
@@ -122,26 +132,50 @@ fn train_tard(args: &Args){
         .with_min_lr(min_learning_rate)
         .init()
         .unwrap();
+    let mut train_step_cnt = 0;
+    if args.model.exists(){
+        train_step_cnt = args.start_step
+            .or_else(|| step_from_model_path(&args.model))
+            .unwrap_or_else(||{
+                warn!("Could not determine training step for {}; starting at step 0 (pass --start-step to override)",
+                      args.model.display());
+                0
+            });
+        let optim_path = args.model.with_file_name(format!("optim_{}.bpk", train_step_cnt));
+        if optim_path.exists(){
+            info!("Resuming optimizer state from {}", optim_path.display());
+            opt = opt.load(&optim_path).unwrap_or_else(|e|{
+                panic!("Failed to load optimizer {}: {:?}", optim_path.display(), e)
+            });
+        }else{
+            warn!("No optimizer state at {}; using a fresh optimizer", optim_path.display());
+        }
+        // Fast-forward the LR schedule to the resumed step.
+        for _ in 0..train_step_cnt{
+            lr.step();
+        }
+        info!("Resuming at training step {}/{}. Replay buffer is not persisted and will refill from self-play.",
+              train_step_cnt, n_training_steps);
+    }
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
 
     info!("Self-play mode: {:?}", args.mode);
     let mut source: Box<dyn SelfPlaySource<PenteState>> = match args.mode{
         Mode::Single => Box::new(SingleThreaded::new(
-            &tard, args.rollouts, dirchlet_hyper_params)),
+            &tard, args.rollouts, dirchlet_hyper_params, args.temp_moves)),
         Mode::Batched => Box::new(WorkerPool::new(
             BatchedBackend::new(&tard, args.eval_batch_size),
-            args.workers, args.rollouts, dirchlet_hyper_params)),
+            args.workers, args.rollouts, dirchlet_hyper_params, args.temp_moves)),
         Mode::Replicated => Box::new(WorkerPool::new(
             ReplicatedBackend::new(&tard),
-            args.workers, args.rollouts, dirchlet_hyper_params)),
+            args.workers, args.rollouts, dirchlet_hyper_params, args.temp_moves)),
     };
 
     let mut is_running = true;
-    let mut train_step_cnt = 0;
     let mut el_cnt_threshold = first_n_elements_train;
     let mut t_loss = TardLoss::default();
     let mut current_lr = ModuleLearningRate::default();
-    while is_running{
+    while is_running && train_step_cnt < n_training_steps{
         info!("Awaiting Self-Play Games");
         let mut el_cnt = 0;
         while el_cnt < el_cnt_threshold{
@@ -166,6 +200,11 @@ fn train_tard(args: &Args){
 
         info!("Performing training {}/{}", train_step_cnt, n_training_steps);
         for _ in 0..n_training_steps_per_iter{
+            // Stop at the end of the cosine schedule; past n_training_steps
+            // burn's cosine LR rises back toward max_learning_rate.
+            if train_step_cnt >= n_training_steps{
+                break;
+            }
             let trn_samples = trn_buf.sample(batch_size);
             t_loss = compute_loss(&tard, &trn_samples);
             debug!("t_loss: {}", t_loss);
@@ -185,6 +224,8 @@ fn train_tard(args: &Args){
         let model_name = format!("model_{}", train_step_cnt);
         tard.clone().save_file(om.model_d.join(model_name))
                     .expect("Unable to save model");
+        opt.save(om.model_d.join(format!("optim_{}.bpk", train_step_cnt)))
+           .expect("Unable to save optimizer state");
         info!("Saving loss");
         let mut lf = OpenOptions::new()
                                 .write(true)
@@ -201,7 +242,16 @@ fn train_tard(args: &Args){
                     current_lr.base()
                 ).unwrap();
     }
-    info!("Main thread loop over");
+    info!("Main thread loop over at training step {}/{}", train_step_cnt, n_training_steps);
     drop(source); // joins worker threads, if any
     info!("Main thread shutting down");
+}
+
+// Parses <N> from a checkpoint path of the form `.../model_<N>.bpk`.
+fn step_from_model_path(p: &Path) -> Option<usize>{
+    p.file_stem()?
+     .to_str()?
+     .strip_prefix("model_")?
+     .parse()
+     .ok()
 }

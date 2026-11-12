@@ -12,7 +12,7 @@ use rand_distr::multi::Dirichlet;
 use crate::tard::{self, TrainingElement};
 use crate::gamestate::{GameState, Action};
 use crate::evaluator::*;
-use crate::utils::{legalize_policy, normalize};
+use crate::utils::normalize;
 
 
 pub fn inference <G: GameState>(
@@ -23,9 +23,7 @@ pub fn inference <G: GameState>(
     let dhp = DirichletHParams::default();
     let (mcts_post, val_post) = mcts(g, eval, num_rollouts, &dhp);
     let mcts_prob = exp(&mcts_post);
-    let action = WeightedIndex::new(&mcts_prob)
-                               .unwrap()
-                               .sample(&mut rand::rng());
+    let action = select_action(&mcts_prob, true);
     debug!("Current eval: {}", val_post);
     return (action, val_post);
 }
@@ -35,6 +33,7 @@ pub fn run_self_play <G: GameState>(
     eval: &mut impl Evaluator<G>,
     num_sims: usize,
     dhp: &DirichletHParams,
+    temp_moves: usize,
 ) -> Vec<SelfPlayElement<G>>{
     debug!("Running self play");
     let mut sp_vec = Vec::new();
@@ -45,9 +44,8 @@ pub fn run_self_play <G: GameState>(
         debug!("Computing self-play move#: {}", move_n);
         let (mcts_post, val_post) = mcts(&g, eval, num_sims, dhp);
         let mcts_prob = exp(&mcts_post);
-        let action = WeightedIndex::new(&mcts_prob)
-                                   .unwrap()
-                                   .sample(&mut rand::rng());
+        // Sample for the first temp_moves plies (opening variety), then play greedily.
+        let action = select_action(&mcts_prob, move_n >= temp_moves);
         let sp_element = SelfPlayElement{
             g: g.clone(),
             mcts_post: mcts_post,
@@ -70,6 +68,24 @@ pub fn run_self_play <G: GameState>(
     }
     trace!("{:?}", &sp_vec);
     return sp_vec;
+}
+
+// Pick an action from a probability distribution over actions.
+// greedy=true takes the most likely action (temperature -> 0),
+// otherwise samples proportionally (temperature 1).
+fn select_action(post_prob: &[f32], greedy: bool) -> Action{
+    if greedy{
+        let mut best = 0;
+        for (i, &p) in post_prob.iter().enumerate(){
+            if p > post_prob[best]{
+                best = i;
+            }
+        }
+        return best;
+    }
+    return WeightedIndex::new(post_prob)
+                         .unwrap()
+                         .sample(&mut rand::rng());
 }
 
 #[derive(Debug)]
@@ -320,8 +336,7 @@ impl MctsTree{
         let (mut p, v) = eval.evaluate(state);
         if node_id == 0{
             trace!("Adding dirichlet noise {} to root", dhp);
-            p = add_dirichlet_noise(p, dhp);
-            p = legalize_policy(p, state);
+            p = add_dirichlet_noise(p, &state.legal_actions_mask(), dhp);
         }
         for action in 0..p.len(){
             if p[action] > 0.0{   // Only add legal actions.
@@ -408,14 +423,23 @@ impl Display for DirichletHParams{
     }
 }
 
-fn add_dirichlet_noise(mut p: Vec<f32>, dhp: &DirichletHParams) -> Vec<f32>{
-    let alpha_vec = vec![dhp.alpha; p.len()];
+// Mixes Dirichlet noise into p over the legal actions only. p must already be
+// a probability distribution over legal actions, so the result still sums to 1.
+// No-op if noise is disabled or there are fewer than 2 legal actions
+// (Dirichlet needs at least 2 components).
+fn add_dirichlet_noise(mut p: Vec<f32>, legal_mask: &[f32], dhp: &DirichletHParams) -> Vec<f32>{
+    if dhp.epsilon == 0.0{
+        return p;
+    }
+    let legal: Vec<usize> = (0..p.len()).filter(|&i| legal_mask[i] != 0.0).collect();
+    if legal.len() < 2{
+        return p;
+    }
+    let alpha_vec = vec![dhp.alpha; legal.len()];
     let dirichlet = Dirichlet::new(&alpha_vec).unwrap();
-    let mut rng = rand::rng();
-    let noise = dirichlet.sample(&mut rng);
-    for i in 0..p.len(){
-        p[i] = (1.0 -dhp.epsilon) * p[i] + dhp.epsilon * noise[i];
+    let noise = dirichlet.sample(&mut rand::rng());
+    for (&i, &n) in legal.iter().zip(noise.iter()){
+        p[i] = (1.0 - dhp.epsilon) * p[i] + dhp.epsilon * n;
     }
     return p;
-
 }

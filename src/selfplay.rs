@@ -32,21 +32,23 @@ pub struct SingleThreaded{
     eval: TardEvaluator,
     n_rollouts: usize,
     dhp: DirichletHParams,
+    temp_moves: usize,
 }
 
 impl SingleThreaded{
-    pub fn new(t: &Tard, n_rollouts: usize, dhp: DirichletHParams) -> Self{
+    pub fn new(t: &Tard, n_rollouts: usize, dhp: DirichletHParams, temp_moves: usize) -> Self{
         return Self{
             eval: TardEvaluator::new(t),
             n_rollouts,
             dhp,
+            temp_moves,
         };
     }
 }
 
 impl <G: GameState> SelfPlaySource<G> for SingleThreaded{
     fn next_game(&mut self) -> Option<Vec<SelfPlayElement<G>>>{
-        return Some(run_self_play::<G>(&mut self.eval, self.n_rollouts, &self.dhp));
+        return Some(run_self_play::<G>(&mut self.eval, self.n_rollouts, &self.dhp, self.temp_moves));
     }
 
     fn update_model(&mut self, t: &Tard){
@@ -68,13 +70,14 @@ impl <G: GameState, B: EvalBackend<G>> WorkerPool<G, B>{
         mut backend: B,
         n_workers: usize,
         n_rollouts: usize,
-        dhp: DirichletHParams) -> Self
+        dhp: DirichletHParams,
+        temp_moves: usize) -> Self
     {
-        let (s_games, r_games) = crossbeam::channel::bounded(4096);
+        let (s_games, r_games) = crossbeam::channel::bounded(n_workers.max(1));
         let mut handles = Vec::with_capacity(n_workers);
         for i in 0..n_workers{
             let eval = backend.client();
-            handles.push(start_worker(i, s_games.clone(), eval, n_rollouts, dhp.clone()));
+            handles.push(start_worker(i, s_games.clone(), eval, n_rollouts, dhp.clone(), temp_moves));
         }
         return Self{
             backend,
@@ -112,13 +115,14 @@ fn start_worker<G: GameState>(
     s: Sender<Vec<SelfPlayElement<G>>>,
     mut eval: impl Evaluator<G>,
     n_rollouts: usize,
-    dhp: DirichletHParams) -> JoinHandle<()>
+    dhp: DirichletHParams,
+    temp_moves: usize) -> JoinHandle<()>
 {
     debug!("Spawning worker thread #{}", thread_id);
     thread::spawn(move ||{
         let mut self_play_count = 0;
         loop{
-            let game_data = run_self_play::<G>(&mut eval, n_rollouts, &dhp);
+            let game_data = run_self_play::<G>(&mut eval, n_rollouts, &dhp, temp_moves);
             debug!("Worker #{} self play game {} complete, {} training elements",
                    thread_id, self_play_count, game_data.len());
             if s.send(game_data).is_err(){
