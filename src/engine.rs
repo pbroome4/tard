@@ -453,3 +453,205 @@ impl Display for DirichletHParams{
                self.epsilon, self.alpha)
     }
 }
+
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use crate::pente::{PenteState, coord_2_action};
+
+    // Uniform-policy, zero-value evaluator that counts its calls.
+    struct Counting{ n: usize }
+    impl Evaluator<PenteState> for Counting{
+        fn evaluate(&mut self, g: &PenteState) -> (Vec<f32>, f32){
+            self.n += 1;
+            return NullEvaluator{}.evaluate(g);
+        }
+    }
+
+    fn noise() -> DirichletHParams{
+        return DirichletHParams{ epsilon: 0.25, alpha: 0.25 };
+    }
+
+    fn position(moves: &[(usize, usize)]) -> PenteState{
+        let mut g = PenteState::new();
+        for &(r, c) in moves{
+            assert!(g.play(r, c));
+        }
+        return g;
+    }
+
+    fn assert_distribution(p: &[f32]){
+        let sum: f32 = p.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-4, "sums to {sum}");
+        assert!(p.iter().all(|&x| (0.0..=1.0).contains(&x)));
+    }
+
+    // Number of nodes in the subtree rooted at node_id (inclusive).
+    fn subtree_size(tree: &MctsTree, node_id: NodeId) -> usize{
+        return 1 + tree.children(node_id).map(|c| subtree_size(tree, c)).sum::<usize>();
+    }
+
+    // Structural invariants: parent links match, and every expanded node has
+    // exactly 1 + (sum of its children's visits) visits.
+    fn assert_consistent(tree: &MctsTree){
+        assert!(tree[0].parent.is_none());
+        for id in 0..tree.nodes_.len(){
+            let child_visits: u32 = tree.children(id).map(|c| tree[c].visits).sum();
+            for c in tree.children(id){
+                assert_eq!(tree[c].parent, Some(id));
+            }
+            if tree[id].is_expanded(){
+                assert_eq!(tree[id].visits, 1 + child_visits, "node {id}");
+            }
+        }
+    }
+
+    #[test]
+    fn posterior_is_a_distribution_over_legal_moves(){
+        let g = position(&[(4, 4), (4, 5), (3, 3)]);
+        let (post, value) = mcts(&g, &mut NullEvaluator{}, 100, &noise());
+        assert_distribution(&post);
+        for (a, &legal) in g.legal_actions_mask().iter().enumerate(){
+            if !legal{
+                assert_eq!(post[a], 0.0, "illegal action {a} has mass");
+            }
+        }
+        assert!((-1.0..=1.0).contains(&value));
+    }
+
+    #[test]
+    fn single_simulation_posterior_falls_back_to_priors(){
+        let g = position(&[(4, 4)]);
+        let (post, _) = mcts(&g, &mut NullEvaluator{}, 1, &DirichletHParams::default());
+        let uniform = 1.0 / 80.0;
+        for (a, &legal) in g.legal_actions_mask().iter().enumerate(){
+            let expected = if legal {uniform} else {0.0};
+            assert!((post[a] - expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn fresh_search_runs_exactly_num_sims_evaluations(){
+        // No terminal positions are reachable this early, so every
+        // simulation ends in one network evaluation.
+        let mut ev = Counting{ n: 0 };
+        mcts(&PenteState::new(), &mut ev, 200, &noise());
+        assert_eq!(ev.n, 200);
+    }
+
+    #[test]
+    fn finds_an_immediate_win(){
+        // Black has four in a row on row 0 and is to move.
+        let g = position(&[(0, 0), (8, 0), (0, 1), (8, 2), (0, 2), (8, 4), (0, 3), (8, 6)]);
+        assert!(g.is_black());
+        let (post, _) = mcts(&g, &mut NullEvaluator{}, 400, &DirichletHParams::default());
+        let win = coord_2_action(0, 4);
+        assert_eq!(select_action(&post, true), win);
+        assert!(post[win] > 0.5, "winning move got only {} of the visits", post[win]);
+    }
+
+    #[test]
+    fn back_propagate_alternates_sign_up_the_tree(){
+        let mut tree = MctsTree::new(C_PUCT);
+        let child = tree.add_child(0, 0, 1.0);
+        let grandchild = tree.add_child(1, child, 1.0);
+        tree.back_propagate(grandchild, 1.0);
+        assert_eq!(tree[grandchild].value, 1.0);
+        assert_eq!(tree[child].value, -1.0);
+        assert_eq!(tree[0].value, 1.0);
+        for id in [0, child, grandchild]{
+            assert_eq!(tree[id].visits, 1);
+        }
+    }
+
+    #[test]
+    fn reroot_keeps_the_chosen_subtree_and_its_statistics(){
+        let g = PenteState::new();
+        let mut tree = MctsTree::new(C_PUCT);
+        let (post, _) = search(&mut tree, &g, &mut NullEvaluator{}, 300, &noise());
+        assert_consistent(&tree);
+        let action = select_action(&post, true);
+        let old_child = tree.children(0).find(|&c| tree[c].action == Some(action)).unwrap();
+        let (visits, value) = (tree[old_child].visits, tree[old_child].value);
+        let size = subtree_size(&tree, old_child);
+
+        let new_tree = tree.reroot(action);
+        assert_eq!(new_tree.nodes_.len(), size);
+        assert_eq!(new_tree[0].visits, visits);
+        assert_eq!(new_tree[0].value, value);
+        assert_eq!(new_tree[0].action, None);
+        assert_consistent(&new_tree);
+    }
+
+    #[test]
+    fn reroot_without_a_matching_child_gives_a_fresh_tree(){
+        let tree = MctsTree::new(C_PUCT).reroot(5);
+        assert_eq!(tree.nodes_.len(), 1);
+        assert_eq!(tree[0].visits, 0);
+        assert!(!tree[0].is_expanded());
+    }
+
+    #[test]
+    fn reused_search_only_tops_up_to_num_sims(){
+        let mut g = PenteState::new();
+        let mut tree = MctsTree::new(C_PUCT);
+        let (post, _) = search(&mut tree, &g, &mut NullEvaluator{}, 200, &noise());
+        let action = select_action(&post, true);
+        g.apply_action(action);
+        tree = tree.reroot(action);
+        let reused = tree[0].visits as usize;
+        assert!(reused > 0 && reused < 200);
+
+        let mut ev = Counting{ n: 0 };
+        search(&mut tree, &g, &mut ev, 200, &noise());
+        assert_eq!(ev.n, 200 - reused);
+        assert_eq!(tree[0].visits, 200);
+        assert_consistent(&tree);
+    }
+
+    #[test]
+    fn root_noise_keeps_priors_normalized(){
+        let g = PenteState::new();
+        let mut tree = MctsTree::new(C_PUCT);
+        mcts_sim(&mut tree, &g, &mut NullEvaluator{}); // expand the root
+        let priors = |t: &MctsTree| mcts_tree_prior(t, 0, PenteState::ACTN_SPC_SIZE);
+        let before = priors(&tree);
+
+        tree.add_root_noise(&DirichletHParams::default()); // epsilon 0: no-op
+        assert_eq!(priors(&tree), before);
+
+        tree.add_root_noise(&noise());
+        let after = priors(&tree);
+        assert_distribution(&after);
+        assert_ne!(after, before);
+    }
+
+    #[test]
+    fn self_play_outcomes_alternate_from_the_winners_perspective(){
+        for _ in 0..3{
+            let game = run_self_play::<PenteState>(&mut NullEvaluator{}, 16, &noise(), 4);
+            assert!(!game.is_empty());
+            assert!(!game[0].g.is_terminal());
+            let last = game.last().unwrap().outcome;
+            // The last mover either won (+1) or the game was drawn (0).
+            assert!(last == 1.0 || last == 0.0, "last outcome {last}");
+            for pair in game.windows(2){
+                assert_eq!(pair[0].outcome, -pair[1].outcome);
+            }
+            for spe in &game{
+                assert_distribution(&spe.mcts_post);
+            }
+        }
+    }
+
+    #[test]
+    fn select_action_greedy_takes_argmax_and_sampling_avoids_zero_mass(){
+        let p = [0.0, 0.2, 0.0, 0.8];
+        assert_eq!(select_action(&p, true), 3);
+        for _ in 0..200{
+            let a = select_action(&p, false);
+            assert!(a == 1 || a == 3);
+        }
+    }
+}

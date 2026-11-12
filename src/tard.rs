@@ -289,3 +289,33 @@ impl TrainingBuffer{
 
 
 
+
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+
+    fn element(outcome: f32) -> TrainingElement{
+        return TrainingElement{ state: vec![], mcts_posterior: vec![], outcome };
+    }
+
+    #[test]
+    fn training_buffer_evicts_the_oldest_elements_at_capacity(){
+        let mut buf = TrainingBuffer::new(3);
+        assert!(buf.is_empty());
+        buf.extend((0..5).map(|i| element(i as f32)));
+        assert_eq!(buf.len(), 3);
+        let kept: Vec<f32> = buf.memory_.iter().map(|e| e.outcome).collect();
+        assert_eq!(kept, vec![2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn training_buffer_samples_with_replacement(){
+        let mut buf = TrainingBuffer::new(10);
+        assert!(buf.sample(5).is_empty(), "sampling an empty buffer returns nothing");
+        buf.extend((0..3).map(|i| element(i as f32)));
+        let s = buf.sample(50);
+        assert_eq!(s.len(), 50);
+        assert!(s.iter().all(|e| (0.0..3.0).contains(&e.outcome)));
+    }
+}

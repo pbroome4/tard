@@ -229,3 +229,132 @@ pub fn load_model<G: GameState>(p: &Path, device: &Device) -> Result<Tard, Recor
     info!("Tard model loaded");
     return Ok(tard);
 }
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use crate::pente::PenteState;
+
+    // A fresh, empty scratch directory under the system temp dir.
+    fn scratch_dir(name: &str) -> PathBuf{
+        let d = std::env::temp_dir().join(format!("pentard_test_{}_{}", std::process::id(), name));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        return d;
+    }
+
+    #[test]
+    fn normalize_scales_to_sum_one(){
+        assert_eq!(normalize(vec![1.0, 3.0]), vec![0.25, 0.75]);
+    }
+
+    #[test]
+    fn legalize_policy_masks_illegal_moves_and_renormalizes(){
+        let mut g = PenteState::new();
+        g.play(0, 0);
+        let mut p = vec![0.0; 81];
+        p[0] = 0.5; // occupied
+        p[1] = 0.25;
+        p[2] = 0.25;
+        let p = legalize_policy(p, &g);
+        assert_eq!(p[0], 0.0);
+        assert!((p[1] - 0.5).abs() < 1e-6 && (p[2] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn legalize_policy_falls_back_to_uniform_without_usable_mass(){
+        let mut g = PenteState::new();
+        g.play(4, 4);
+        let all_on_illegal = {
+            let mut p = vec![0.0; 81];
+            p[40] = 1.0;
+            p
+        };
+        for bad in [vec![0.0; 81], vec![f32::NAN; 81], vec![f32::INFINITY; 81], all_on_illegal]{
+            let p = legalize_policy(bad, &g);
+            assert_eq!(p[40], 0.0);
+            for (a, &x) in p.iter().enumerate(){
+                if a != 40{
+                    assert!((x - 1.0 / 80.0).abs() < 1e-6, "action {a}: {x}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parse_coord_accepts_row_comma_col(){
+        assert_eq!(parse_coord("3,4"), Ok((3, 4)));
+        assert_eq!(parse_coord(" 3 , 4 \n"), Ok((3, 4)));
+        assert!(parse_coord("3").is_err());
+        assert!(parse_coord("a,b").is_err());
+        assert!(parse_coord("-1,2").is_err());
+        assert!(parse_coord("").is_err());
+    }
+
+    #[test]
+    fn step_from_checkpoint_dir_parses_step_dirs_only(){
+        assert_eq!(step_from_checkpoint_dir(Path::new("out/run_1/checkpoints/step_000512")), Some(512));
+        assert_eq!(step_from_checkpoint_dir(Path::new("step_7")), Some(7));
+        assert_eq!(step_from_checkpoint_dir(Path::new("step_000512/")), Some(512));
+        assert_eq!(step_from_checkpoint_dir(Path::new("model_512")), None);
+        assert_eq!(step_from_checkpoint_dir(Path::new("step_abc")), None);
+    }
+
+    #[test]
+    fn selfplay_to_training_keeps_targets_and_encodes_state(){
+        let g = PenteState::new();
+        let spe = SelfPlayElement{ g: g.clone(), mcts_post: vec![0.5, 0.5], outcome: -1.0 };
+        let te = selfplay_to_training(vec![spe]);
+        assert_eq!(te.len(), 1);
+        assert_eq!(te[0].state, g.to_tensor());
+        assert_eq!(te[0].mcts_posterior, vec![0.5, 0.5]);
+        assert_eq!(te[0].outcome, -1.0);
+    }
+
+    #[test]
+    fn panic_message_reads_str_and_string_payloads(){
+        let p = std::panic::catch_unwind(|| panic!("static msg")).unwrap_err();
+        assert_eq!(panic_message(&p), "static msg");
+        let p = std::panic::catch_unwind(|| panic!("formatted {}", 7)).unwrap_err();
+        assert_eq!(panic_message(&p), "formatted 7");
+    }
+
+    #[test]
+    fn output_manager_creates_the_run_layout(){
+        let root = scratch_dir("layout");
+        let om = OutputManager::new(&root, "{\"workers\": 4}").unwrap();
+        assert_eq!(om.run_d.parent().unwrap(), root);
+        assert!(om.run_d.file_name().unwrap().to_str().unwrap().starts_with("run_"));
+        assert_eq!(fs::read_to_string(om.run_d.join("config.json")).unwrap(), "{\"workers\": 4}");
+        assert_eq!(fs::read_to_string(om.run_d.join("metrics.csv")).unwrap(), METRICS_HEADER);
+
+        let ckpt = om.checkpoint_dir(512).unwrap();
+        assert_eq!(ckpt, om.run_d.join("checkpoints").join("step_000512"));
+        assert!(ckpt.is_dir());
+        assert_eq!(step_from_checkpoint_dir(&ckpt), Some(512));
+        assert!(om.checkpoint_dir(512).is_err(), "an existing checkpoint must not be reused");
+
+        // A second run in the same second still gets its own directory.
+        let om2 = OutputManager::new(&root, "{}").unwrap();
+        assert_ne!(om.run_d, om2.run_d);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn append_metrics_writes_one_csv_row_per_call(){
+        let root = scratch_dir("metrics");
+        let mut om = OutputManager::new(&root, "{}").unwrap();
+        om.append_metrics(&IterationMetrics{
+            step: 512, wall_time_s: 12.34, lr: 0.005,
+            loss: 1.5, policy_loss: 1.0, value_loss: 0.5,
+            games: 4, positions: 130, draws: 1,
+        }).unwrap();
+        let csv = fs::read_to_string(om.run_d.join("metrics.csv")).unwrap();
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let n_cols = lines[0].split(',').count();
+        assert_eq!(lines[1].split(',').count(), n_cols);
+        assert_eq!(lines[1], "512,12.3,0.005,1.5,1,0.5,4,130,32.50,0.2500");
+        fs::remove_dir_all(&root).unwrap();
+    }
+}

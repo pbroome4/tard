@@ -18,7 +18,8 @@ cargo run --release --bin interactive      # human-vs-human Pente in the termina
 - burn is built with the `cuda`, `fusion`, and `flex` features; `Device::default()` picks the backend.
 - Logging uses `tracing` with `EnvFilter`; defaults are `warn` globally and `pentard=info`. Override with e.g. `RUST_LOG=pentard=debug`.
 - Profiling: `cargo flamegraph --dev --min-width 0.0 -b pentard` (requires `sudo sysctl -w kernel.perf_event_paranoid=-1` and `kernel.kptr_restrict=0`).
-- There is no test suite. `src/bin/burn_test.rs` and `src/bin/crossbeam_test.rs` are scratch experiments, not tests.
+- Tests: `cargo test` (about 3 s, CPU only). Unit tests live in `#[cfg(test)]` modules next to the code: Pente rules (`pente.rs`, with a `board(&["BWW."], black_to_move)` diagram helper), MCTS/self-play invariants (`engine.rs`), utilities and the run-directory layout (`utils.rs`), worker-pool panic handling with fake backends (`selfplay.rs`), and the replay buffer (`tard.rs`). Nothing touching the network or GPU is unit-tested; for that, do a tiny real run, e.g. `--workers 16 --rollouts 10 --steps-per-iter 8 --batch-size 32 --warmup-iters 1 --total-steps 16`.
+- `src/bin/burn_test.rs` and `src/bin/crossbeam_test.rs` are scratch experiments, not tests.
 
 ## Architecture
 
