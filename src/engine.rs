@@ -74,7 +74,7 @@ pub fn run_self_play <G: GameState>(
 // Pick an action from a probability distribution over actions.
 // greedy=true takes the most likely action (temperature -> 0),
 // otherwise samples proportionally (temperature 1).
-fn select_action(post_prob: &[f32], greedy: bool) -> Action{
+pub fn select_action(post_prob: &[f32], greedy: bool) -> Action{
     if greedy{
         let mut best = 0;
         for (i, &p) in post_prob.iter().enumerate(){

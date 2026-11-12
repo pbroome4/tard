@@ -5,6 +5,7 @@ AI for board game Pente
 ```bash
 cargo run --release --bin pentard -- --mode batched        # self-play training
 cargo run --release --bin inference -- --model model.bpk   # play against a trained model
+cargo run --release --bin arena -- --model-a a.bpk --model-b b.bpk   # match two models (--games, --rollouts[-a|-b], --temp-moves, --threads, --show, --watch [--delay-ms])
 cargo run --release --bin interactive                      # human-vs-human Pente
 ```
 
