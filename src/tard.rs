@@ -2,7 +2,7 @@ use burn::prelude::*;
 use burn::nn::conv::{Conv2d, Conv2dConfig};
 use burn::nn::{BatchNorm, BatchNormConfig, Linear, LinearConfig};
 use burn::tensor::Device;
-use burn::tensor::activation::{relu, tanh, log_softmax};
+use burn::tensor::activation::{leaky_relu, relu, tanh, log_softmax};
 use tracing::{debug, info};
 use core::fmt;
 use bounded_vec_deque::BoundedVecDeque;
@@ -23,6 +23,9 @@ pub struct NetConfig{
     pub value_hidden: usize, // hidden units in the value head
 }
 
+
+// Negative slope of the leaky_relu activations in the policy and value heads.
+const HEAD_LEAKY_SLOPE: f64 = 0.01;
 
 #[derive(Debug, Module)]
 pub struct Tard{
@@ -101,22 +104,29 @@ impl Tard {
         }
 
         // 2. Policy Head
+        // leaky_relu rather than relu so the narrow 2-channel layer can't
+        // get stuck with every square zeroed (see the value head below).
         let p = self.policy_conv.forward(x.clone());
         let p = self.policy_bn.forward(p);
-        let p = relu(p);
+        let p = leaky_relu(p, HEAD_LEAKY_SLOPE);
         let [batch_size, channels, height, width] = p.shape().dims();
         let p = p.reshape([batch_size, channels * height * width]);
         let p = self.policy_fc.forward(p);
         let p = log_softmax(p, 1);
 
         // 3. Value Head
+        // No hard ReLU anywhere in this head: with a single channel, one
+        // shared ReLU threshold after value_bn could zero every square for
+        // every position, cutting all gradient and leaving the head stuck
+        // at a constant output. value_conv -> value_bn -> value_fc1 stays
+        // linear and the hidden layer uses leaky_relu, so a gradient always
+        // flows back. (The trunk avoids this through its residual skips.)
         let v = self.value_conv.forward(x);
         let v = self.value_bn.forward(v);
-        let v = relu(v);
         let [batch_size, channels, height, width] = v.shape().dims();
         let v = v.reshape([batch_size, channels * height * width]);
         let v = self.value_fc1.forward(v);
-        let v = relu(v);
+        let v = leaky_relu(v, HEAD_LEAKY_SLOPE);
         let v = self.value_fc2.forward(v);
         let v = tanh(v);
 
