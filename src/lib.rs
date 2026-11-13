@@ -8,10 +8,10 @@
 //! - `training`: replay buffer, loss, and the run directory
 //!
 //! The `tard` binary (src/main.rs, src/commands/) is the command line on top.
+pub mod evaluator;
 pub mod games;
 pub mod mcts;
 pub mod model;
-pub mod evaluator;
 pub mod selfplay;
 pub mod training;
 pub mod util;

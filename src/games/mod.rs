@@ -7,21 +7,21 @@
 //! `GameState`, `TextGame` and `WebGame` in a new module, then add a `Game` variant and
 //! an arm to `with_game!` and `Game::default_net` below.
 
-use std::fmt::{self, Debug};
 use clap::ValueEnum;
 use serde::Serialize;
+use std::fmt::{self, Debug};
 
 use crate::model::NetConfig;
 
+pub mod hive;
 pub mod minipente;
 pub mod pente;
-pub mod hive;
 pub mod uttt;
 
 pub type Action = usize;
 
 // GameState is an abstraction of a 2D board game.
-pub trait GameState: Default + Clone + fmt::Display + Debug + Send + 'static{
+pub trait GameState: Default + Clone + fmt::Display + Debug + Send + 'static {
     // Short unique identifier (e.g. "minipente"). Saved with every model so a
     // model trained for one game can't be loaded as another.
     const NAME: &'static str;
@@ -54,7 +54,7 @@ pub trait GameState: Default + Clone + fmt::Display + Debug + Send + 'static{
 
 // What the commands (play, arena) need beyond GameState: player names, and
 // moves as text a person can read and type.
-pub trait TextGame: GameState{
+pub trait TextGame: GameState {
     // Names of the first and second player, e.g. ["Black", "White"].
     const PLAYERS: [&'static str; 2];
 
@@ -74,7 +74,7 @@ pub trait TextGame: GameState{
 // What `tard web` needs beyond TextGame: the position and moves as JSON for
 // the page to draw. Each game picks its own shape, tagged by "kind";
 // web/index.html knows how to draw each kind.
-pub trait WebGame: TextGame{
+pub trait WebGame: TextGame {
     // The whole position: pieces, captures or hands, and so on.
     fn position_json(&self) -> serde_json::Value;
 
@@ -82,11 +82,11 @@ pub trait WebGame: TextGame{
     fn action_json(&self, action: Action) -> serde_json::Value;
 }
 
-/// Every implemented game. Its value names are the `GameState::NAME`s, used
-/// for `--game` and saved in config.json and model sidecars.
+// Every implemented game. Its value names are the `GameState::NAME`s, used
+// for `--game` and saved in config.json and model sidecars.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Game{
+pub enum Game {
     /// Pente on a 9x9 board, no opening restrictions
     #[value(name = "minipente")]
     MiniPente,
@@ -99,37 +99,49 @@ pub enum Game{
     Uttt,
 }
 
-/// Runs `$body` with `$G` naming the state type of `$game` (a `Game`), so
-/// generic code can be called for whichever game was picked at runtime:
-/// `with_game!(game, G => train::<G>(&args))`.
+// Runs `$body` with `$G` naming the state type of `$game` (a `Game`), so
+// generic code can be called for whichever game was picked at runtime:
+// `with_game!(game, G => train::<G>(&args))`.
 #[macro_export]
-macro_rules! with_game{
+macro_rules! with_game {
     ($game:expr, $G:ident => $body:expr) => {
-        match $game{
-            $crate::games::Game::MiniPente => { type $G = $crate::games::minipente::MiniPenteState; $body }
-            $crate::games::Game::Pente => { type $G = $crate::games::pente::PenteState; $body }
-            $crate::games::Game::Hive => { type $G = $crate::games::hive::HiveState; $body }
-            $crate::games::Game::Uttt => { type $G = $crate::games::uttt::UtttState; $body }
+        match $game {
+            $crate::games::Game::MiniPente => {
+                type $G = $crate::games::minipente::MiniPenteState;
+                $body
+            }
+            $crate::games::Game::Pente => {
+                type $G = $crate::games::pente::PenteState;
+                $body
+            }
+            $crate::games::Game::Hive => {
+                type $G = $crate::games::hive::HiveState;
+                $body
+            }
+            $crate::games::Game::Uttt => {
+                type $G = $crate::games::uttt::UtttState;
+                $body
+            }
         }
     };
 }
 
-impl Game{
+impl Game {
     pub const ALL: [Game; 4] = [Game::MiniPente, Game::Pente, Game::Hive, Game::Uttt];
 
-    /// The game's `GameState::NAME`.
-    pub fn name(self) -> &'static str{
+    // The game's `GameState::NAME`.
+    pub fn name(self) -> &'static str {
         return with_game!(self, G => G::NAME);
     }
 
-    /// The game whose `GameState::NAME` is `name`.
-    pub fn from_name(name: &str) -> Option<Game>{
+    // The game whose `GameState::NAME` is `name`.
+    pub fn from_name(name: &str) -> Option<Game> {
         return Self::ALL.into_iter().find(|g| g.name() == name);
     }
 
-    /// Network size for a fresh model of this game.
-    pub fn default_net(self) -> NetConfig{
-        return match self{
+    // Network size for a fresh model of this game.
+    pub fn default_net(self) -> NetConfig {
+        return match self {
             Game::MiniPente => minipente::default_net_config(),
             Game::Pente => pente::default_net_config(),
             Game::Hive => hive::default_net_config(),
@@ -138,7 +150,7 @@ impl Game{
     }
 }
 
-/// Parses "row, col" (spaces optional), as the grid games type their moves.
+// Parses "row, col" (spaces optional), as the grid games type their moves.
 pub fn parse_coord(s: &str) -> Result<(usize, usize), String> {
     let mut parts = s.trim().split(',');
     if let (Some(row_str), Some(col_str)) = (parts.next(), parts.next()) {
@@ -149,24 +161,34 @@ pub fn parse_coord(s: &str) -> Result<(usize, usize), String> {
     return Err(String::from("Invalid format"));
 }
 
-
 #[cfg(test)]
-mod tests{
+mod tests {
     use super::*;
 
     #[test]
-    fn game_names_match_their_states_and_round_trip(){
-        assert_eq!(Game::ALL.map(Game::name), ["minipente", "pente", "hive", "uttt"]);
-        for g in Game::ALL{
+    fn game_names_match_their_states_and_round_trip() {
+        assert_eq!(
+            Game::ALL.map(Game::name),
+            ["minipente", "pente", "hive", "uttt"]
+        );
+        for g in Game::ALL {
             assert_eq!(Game::from_name(g.name()), Some(g));
-            assert_eq!(g.to_possible_value().unwrap().get_name(), g.name(), "--game value");
-            assert_eq!(serde_json::to_string(&g).unwrap(), format!("\"{}\"", g.name()), "config.json value");
+            assert_eq!(
+                g.to_possible_value().unwrap().get_name(),
+                g.name(),
+                "--game value"
+            );
+            assert_eq!(
+                serde_json::to_string(&g).unwrap(),
+                format!("\"{}\"", g.name()),
+                "config.json value"
+            );
         }
         assert_eq!(Game::from_name("chess"), None);
     }
 
     #[test]
-    fn parse_coord_accepts_row_comma_col(){
+    fn parse_coord_accepts_row_comma_col() {
         assert_eq!(parse_coord("3,4"), Ok((3, 4)));
         assert_eq!(parse_coord(" 3 , 4 \n"), Ok((3, 4)));
         assert!(parse_coord("3").is_err());

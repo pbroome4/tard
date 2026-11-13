@@ -23,6 +23,13 @@ cargo run --release -- arena --model-a a.bpk --model-b b.bpk   # model-vs-model 
 - Profiling: `cargo flamegraph --dev --min-width 0.0 -- train ...` (requires `sudo sysctl -w kernel.perf_event_paranoid=-1` and `kernel.kptr_restrict=0`).
 - Tests: `cargo test` (about 3 s, CPU only). Unit tests live in `#[cfg(test)]` modules next to the code: game rules (`games/minipente.rs` and `games/pente.rs`, each with a `board(&["BWW."], black_to_move)` diagram helper; Pente also covers the tournament rule and seeded random playouts; `games/hive.rs` builds positions from `(player, piece, q, r)` lists and checks each piece's movement, the placement/queen/one-hive/freedom-of-movement rules, win/draw/pass, and seeded random playouts that round-trip every move through its text notation; `games/uttt.rs` sets positions directly and checks forced boards, freed moves, won/tied small boards, the big-board win and draw, and seeded random playouts), the game list (`games/mod.rs`), MCTS invariants (`mcts.rs`), self-play games and worker-pool panic handling with fake backends (`selfplay.rs`), model sidecars (`model.rs`), policy legalizing (`evaluator/mod.rs`), the replay buffer and run-directory layout (`training/`), and the web server's replay, per-game views and model scanning (`commands/web.rs`). Nothing touching the network or GPU is unit-tested; for that, do a tiny real run, e.g. `train --workers 16 --rollouts 10 --steps-per-iter 8 --batch-size 32 --warmup-iters 1 --total-steps 16`.
 
+## Style
+
+- Formatting is rustfmt's default (`cargo fmt`; check with `cargo fmt --check`). Run it before committing.
+- Functions return with an explicit `return x;`, never a bare tail expression (closures may stay expressions, e.g. `|x| x + 1`).
+- Comments are plain `//`, including the ones describing a function, struct or constant. `///` is used only where clap reads it as `--help` text (fields of the `Args` structs, `Command` and `Game` variants), and `//!` for module headers.
+- The game files follow one shape: types, the state struct (fields end in `_`), `default_net_config()`, `Default`, `impl GameState`, the inherent impl (`new`, `is_legal_action`, private helpers like `active_piece`), free functions (`coord_2_action`/`action_2_coord` for grid games), then `TextGame`, `WebGame`, `Display`, and tests. Actions are typed `Action`; a game's status enum is `Ongoing`/`Won`/`Draw`.
+
 ## Layout
 
 ```
