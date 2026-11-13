@@ -1,9 +1,10 @@
 //! The games Tard can play: the `GameState` interface the engine, model and
 //! trainer are generic over, the `TextGame` interface the commands use to
-//! show and read moves, and `Game`, the one list of every implemented game.
+//! show and read moves, `WebGame` for the web page to draw them, and `Game`,
+//! the one list of every implemented game.
 //!
 //! Each game is a separate, self-contained module. To add one: implement
-//! `GameState` and `TextGame` in a new module, then add a `Game` variant and
+//! `GameState`, `TextGame` and `WebGame` in a new module, then add a `Game` variant and
 //! an arm to `with_game!` and `Game::default_net` below.
 
 use std::fmt::{self, Debug};
@@ -67,6 +68,17 @@ pub trait TextGame: GameState{
 
     // `action` (legal here) as text in the format parse_action reads.
     fn action_text(&self, action: Action) -> String;
+}
+
+// What `tard web` needs beyond TextGame: the position and moves as JSON for
+// the page to draw. Each game picks its own shape, tagged by "kind";
+// web/index.html knows how to draw each kind.
+pub trait WebGame: TextGame{
+    // The whole position: pieces, captures or hands, and so on.
+    fn position_json(&self) -> serde_json::Value;
+
+    // Where `action` (legal here) plays, in the position's terms.
+    fn action_json(&self, action: Action) -> serde_json::Value;
 }
 
 /// Every implemented game. Its value names are the `GameState::NAME`s, used

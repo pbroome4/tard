@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tard Game Room</title>
+<style>
+  :root{
+    --bg: #f3efe7;
+    --panel: #fffdf9;
+    --text: #22201c;
+    --muted: #6d675d;
+    --border: #e2dbcd;
+    --accent: #2d6a4f;
+    --accent-soft: #d8eadf;
+    --on-accent: #ffffff;
+    --danger: #a4372b;
+    --board: #dcae63;
+    --board-edge: #b88a42;
+    --line: #5a4120;
+    --felt: #e7dfcf;
+    --felt-edge: #cfc3ab;
+    --tile-w: #faf6ec;
+    --tile-w-edge: #8b8170;
+    --tile-b: #2b2723;
+    --tile-b-edge: #0f0d0b;
+    --dest: #2d6a4f;
+    --last: #d48a1f;
+    --heat: #1f6feb;
+    --shadow: 0 1px 2px rgba(40, 30, 10, .06), 0 8px 24px rgba(40, 30, 10, .08);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg: #141311; --panel: #1e1c19; --text: #ece7de; --muted: #a29b8f; --border: #35312b;
+      --accent: #74c69d; --accent-soft: #23352b; --on-accent: #10231a; --danger: #f08b7d;
+      --board: #c99a50; --board-edge: #9c7232; --line: #4a3418;
+      --felt: #26231f; --felt-edge: #3a352e; --dest: #74c69d; --last: #f0a840; --heat: #58a6ff;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg: #141311; --panel: #1e1c19; --text: #ece7de; --muted: #a29b8f; --border: #35312b;
+    --accent: #74c69d; --accent-soft: #23352b; --on-accent: #10231a; --danger: #f08b7d;
+    --board: #c99a50; --board-edge: #9c7232; --line: #4a3418;
+    --felt: #26231f; --felt-edge: #3a352e; --dest: #74c69d; --last: #f0a840; --heat: #58a6ff;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+    color-scheme: dark;
+  }
+
+  *{ box-sizing: border-box; }
+  body{ margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  [hidden]{ display: none !important; }
+  .wrap{ max-width: 1040px; margin: 0 auto; padding: 24px 16px 40px; }
+  header{ display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  h1{ font-size: 24px; margin: 0; letter-spacing: -.01em; }
+  h2{ font-size: 18px; margin: 0 0 4px; }
+  header .sub{ color: var(--muted); font-size: 14px; }
+  .card{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+  .muted{ color: var(--muted); font-size: 13px; }
+  .error{ color: var(--danger); font-size: 13px; }
+  .section-title{ font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
+
+  button, select{ font: inherit; font-size: 14px; border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+  button:hover:not(:disabled), select:hover:not(:disabled){ border-color: var(--accent); }
+  button:disabled, select:disabled{ opacity: .5; cursor: default; }
+  button.primary{ background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+  select{ max-width: 100%; }
+  .row{ display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .seg{ display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button{ border: 0; border-radius: 0; }
+  .seg button + button{ border-left: 1px solid var(--border); }
+  .seg button.on{ background: var(--accent-soft); font-weight: 600; }
+
+  /* ---------- setup ---------- */
+  .setup{ padding: 20px; display: grid; gap: 22px; max-width: 760px; margin: 0 auto; }
+  .games{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+  .game-card{ text-align: left; padding: 12px 14px; display: grid; gap: 4px; border-radius: 10px; }
+  .game-card .title{ font-weight: 700; font-size: 16px; }
+  .game-card .desc{ color: var(--muted); font-size: 13px; }
+  .game-card .count{ font-size: 12px; color: var(--muted); }
+  .game-card.on{ border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .field{ display: grid; gap: 6px; }
+  .field label{ font-size: 14px; }
+  .two{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 600px){ .two{ grid-template-columns: 1fr; } }
+
+  /* ---------- play ---------- */
+  .layout{ display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 20px; align-items: start; }
+  @media (max-width: 840px){ .layout{ grid-template-columns: minmax(0, 1fr); } }
+  .board-card{ border-radius: 12px; box-shadow: var(--shadow); padding: 10px; width: 100%; max-width: 640px; margin: 0 auto; }
+  .board-card.grid{ background: var(--board); border: 1px solid var(--board-edge); }
+  .board-card.hive{ background: var(--felt); border: 1px solid var(--felt-edge); }
+  svg#board{ display: block; width: 100%; height: auto; user-select: none; touch-action: manipulation; }
+  .board-card.hive svg#board{ aspect-ratio: 4 / 3; }
+  svg#board .hit, svg#board [data-q], svg#board [data-action]{ cursor: pointer; }
+  svg#board .hit{ fill: transparent; }
+  svg#board.locked .hit{ cursor: default; }
+
+  .panel{ padding: 16px; display: grid; gap: 16px; }
+  .status{ font-size: 18px; font-weight: 600; min-height: 1.45em; display: flex; align-items: center; gap: 8px; }
+  .dot{ width: 14px; height: 14px; border-radius: 50%; flex: none; border: 1px solid rgba(128,128,128,.6); display: inline-block; }
+  .dot.Black{ background: radial-gradient(circle at 35% 30%, #555, #111 60%); }
+  .dot.White{ background: radial-gradient(circle at 35% 30%, #fff, #d6d3cc 70%); }
+  .spinner{ width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+  .cap-row{ display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; }
+  .who{ display: flex; align-items: center; gap: 8px; }
+  .pips{ display: flex; gap: 4px; }
+  .pip{ width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--border); }
+  .pip.on{ background: var(--accent); border-color: var(--accent); }
+  .hand{ display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 10px; min-height: 40px; }
+  .hand button{ padding: 0; border: 0; background: none; border-radius: 6px; line-height: 0; }
+  .hand button:disabled{ opacity: 1; cursor: default; }
+  .hand button.sel svg polygon{ stroke: var(--dest); stroke-width: .22; }
+  .hand .empty{ color: var(--muted); font-size: 13px; line-height: 40px; }
+  .meter{ position: relative; height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; }
+  .meter .fill{ position: absolute; top: 0; bottom: 0; background: var(--accent); }
+  .meter .mid{ position: absolute; left: 50%; top: -2px; bottom: -2px; width: 2px; background: var(--muted); opacity: .6; }
+  .meter-labels{ display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .search-list{ display: grid; gap: 4px; font-size: 13px; }
+  .search-list .item{ display: grid; grid-template-columns: 1fr 44px; gap: 8px; align-items: center; }
+  .search-list .bar{ height: 6px; border-radius: 3px; background: var(--heat); opacity: .7; }
+  .search-list .name{ display: flex; flex-direction: column; gap: 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .search-list .pct{ text-align: right; color: var(--muted); }
+  label.check{ display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+  .moves{ max-height: 170px; overflow: auto; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+  .moves .n{ display: inline-block; width: 2.6em; }
+  .moves .m{ display: inline-block; min-width: 9.5em; }
+  footer{ margin-top: 18px; color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Tard game room</h1>
+    <span class="sub" id="header-sub">Play MiniPente, Pente or Hive against your models, a friend, or watch two models play.</span>
+  </header>
+
+  <!-- Setup screen -->
+  <section id="setup" class="card setup" hidden>
+    <div>
+      <h2>New game</h2>
+      <div class="error" id="setup-error"></div>
+    </div>
+    <div class="field">
+      <div class="section-title">Game</div>
+      <div class="games" id="games"></div>
+    </div>
+    <div class="field">
+      <div class="section-title">Opponent</div>
+      <div class="seg" id="modes" role="group" aria-label="Opponent">
+        <button type="button" data-mode="computer">Computer</button>
+        <button type="button" data-mode="human">Another person</button>
+        <button type="button" data-mode="cvc">Computer vs computer</button>
+      </div>
+      <div class="muted" id="mode-note"></div>
+    </div>
+    <div class="field" id="seat-field">
+      <div class="section-title">You play</div>
+      <div class="seg" id="seats" role="group" aria-label="Your side"></div>
+    </div>
+    <div class="field" id="model-field">
+      <label for="model">Computer's model</label>
+      <select id="model"></select>
+    </div>
+    <div class="two" id="cvc-fields">
+      <div class="field"><label for="model-a" id="model-a-label"></label><select id="model-a"></select></div>
+      <div class="field"><label for="model-b" id="model-b-label"></label><select id="model-b"></select></div>
+    </div>
+    <div class="field" id="strength-field">
+      <label for="strength">Search per computer move</label>
+      <select id="strength"></select>
+    </div>
+    <div class="row">
+      <button type="button" class="primary" id="start">Start game</button>
+      <button type="button" id="back">Back to the current game</button>
+    </div>
+  </section>
+
+  <!-- Play screen -->
+  <section id="play" class="layout" hidden>
+    <div class="board-card" id="board-card">
+      <svg id="board" role="img" aria-label="Game board"></svg>
+    </div>
+    <aside class="card panel">
+      <div>
+        <div class="status" id="status" aria-live="polite"></div>
+        <div class="muted" id="substatus"></div>
+        <div class="error" id="error"></div>
+      </div>
+      <div id="game-info"></div>
+      <div id="eval-box">
+        <div class="section-title" id="eval-title">Computer's view</div>
+        <div class="meter"><div class="fill" id="meter-fill"></div><div class="mid"></div></div>
+        <div class="meter-labels"><span id="meter-left"></span><span id="meter-right"></span></div>
+        <div class="muted" id="eval-text"></div>
+      </div>
+      <div id="search-box">
+        <div class="section-title">Most-searched moves</div>
+        <div class="search-list" id="search-list"></div>
+      </div>
+      <div class="row">
+        <button type="button" id="pass">Pass</button>
+        <button type="button" id="undo">Undo</button>
+        <button type="button" id="pause">Pause</button>
+        <button type="button" class="primary" id="new-game">New game</button>
+      </div>
+      <label class="check" id="search-toggle"><input type="checkbox" id="show-search"> Show the computer's search</label>
+      <div>
+        <div class="section-title">Moves</div>
+        <div class="moves" id="moves"></div>
+      </div>
+    </aside>
+  </section>
+  <footer id="footer"></footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const S = {
+  catalog: null,
+  // What the setup screen shows.
+  setup: { game: 'minipente', mode: 'computer', seat: 0, model: {}, modelA: {}, modelB: {}, rollouts: null },
+  // The game being played: { game, mode, seat, models: [first player's, second player's] (null = human), rollouts }.
+  cfg: null,
+  token: 0,          // bumped by every new game, undo or resume, so stale async loops stop
+  view: null,
+  ai: null,          // the last computer move, with its search
+  busy: false,
+  paused: false,
+  error: '',
+  note: '',
+  hover: null,       // grid point under the pointer
+  sel: null,         // Hive: the selected piece
+  showSearch: false,
+};
+
+const gameInfo = (name) => S.catalog.games.find((g) => g.name === name);
+const modelLabel = (id) => {
+  for (const g of S.catalog.games) for (const m of g.models) if (m.id === id) return `${m.group} · ${m.label}`;
+  return id;
+};
+const seatOf = (player) => S.view.players.indexOf(player);
+const seatToMove = () => seatOf(S.view.to_move);
+const isComputer = (seat) => S.cfg.models[seat] !== null;
+const humanCanMove = () => !!(S.view && !S.busy && !S.view.over && !isComputer(seatToMove()));
+
+async function api(path, body){
+  const opts = body === undefined ? {} :
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+// ---------- game flow ----------
+
+// Sends the moves so far; with ai, the computer to move also plays.
+async function sync(moves, ai, token){
+  const cfg = S.cfg;
+  const body = { game: cfg.game, moves, ai, rollouts: cfg.rollouts };
+  if (ai) body.model = cfg.models[seatToMove()];
+  S.busy = ai;
+  S.error = '';
+  render();
+  try{
+    const v = await api('/api/play', body);
+    if (token !== S.token) return false;
+    S.view = v;
+    if (v.ai) S.ai = v.ai;
+    S.sel = null;
+    return true;
+  }catch(e){
+    if (token === S.token){ S.error = e.message; S.paused = cfg.mode === 'cvc'; }
+    return false;
+  }finally{
+    if (token === S.token){ S.busy = false; render(); }
+  }
+}
+
+// Shows `moves`, then lets computers move until it's a person's turn.
+async function advance(moves){
+  const token = ++S.token;
+  S.note = '';
+  if (!await sync(moves, false, token)) return;
+  while (token === S.token && !S.view.over && isComputer(seatToMove()) && !S.paused){
+    if (S.cfg.mode === 'cvc') await sleep(400);
+    if (token !== S.token || S.paused) return;
+    if (!await sync(S.view.moves, true, token)) return;
+  }
+}
+
+function play(action){
+  if (!humanCanMove()) return;
+  S.hover = null;
+  advance([...S.view.moves, action]);
+}
+
+function canUndo(){
+  if (!S.view || S.busy || S.cfg.mode === 'cvc') return false;
+  if (S.cfg.mode === 'human') return S.view.moves.length > 0;
+  return S.view.moves.some((_, i) => i % 2 === S.cfg.seat);
+}
+
+function undo(){
+  if (!canUndo()) return;
+  const m = S.view.moves.slice();
+  if (S.cfg.mode === 'human') m.pop();
+  else do { m.pop(); } while (m.length && m.length % 2 !== S.cfg.seat);
+  S.ai = null;
+  advance(m);
+}
+
+function startGame(){
+  const st = S.setup, info = gameInfo(st.game);
+  const model = st.model[st.game] || info.models[0]?.id;
+  const models = st.mode === 'computer' ? (st.seat === 0 ? [null, model] : [model, null])
+    : st.mode === 'cvc' ? [st.modelA[st.game] || info.models[0]?.id, st.modelB[st.game] || info.models[0]?.id]
+    : [null, null];
+  S.cfg = { game: st.game, mode: st.mode, seat: st.seat, models, rollouts: Number($('strength').value) };
+  S.view = null; S.ai = null; S.sel = null; S.paused = false; S.hover = null; S.error = '';
+  showScreen('play');
+  advance([]);
+}
+
+// ---------- screens ----------
+
+function showScreen(which){
+  $('setup').hidden = which !== 'setup';
+  $('play').hidden = which !== 'play';
+  if (which === 'setup') renderSetup(); else render();
+}
+
+function modelOptions(models, selected){
+  const groups = [];
+  for (const m of models){
+    let g = groups.find((x) => x.name === m.group);
+    if (!g) groups.push(g = { name: m.group, models: [] });
+    g.models.push(m);
+  }
+  return groups.map((g) => `<optgroup label="${esc(g.name)}">${g.models.map((m) =>
+    `<option value="${esc(m.id)}"${m.id === selected ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}</optgroup>`).join('');
+}
+
+function renderSetup(){
+  const st = S.setup, info = gameInfo(st.game), hasModels = info.models.length > 0;
+  if (!hasModels && st.mode !== 'human') st.mode = 'human';
+  $('games').innerHTML = S.catalog.games.map((g) => `
+    <button type="button" class="card game-card${g.name === st.game ? ' on' : ''}" data-game="${g.name}">
+      <span class="title">${esc(g.title)}</span>
+      <span class="desc">${esc(g.description)}</span>
+      <span class="count">${g.models.length ? `${g.models.length} trained model${g.models.length === 1 ? '' : 's'}` : 'No trained models yet'}</span>
+    </button>`).join('');
+  for (const b of $('modes').querySelectorAll('button')){
+    b.classList.toggle('on', b.dataset.mode === st.mode);
+    b.disabled = b.dataset.mode !== 'human' && !hasModels;
+  }
+  $('mode-note').textContent = hasModels ? '' :
+    `No ${info.title} models found, so only two-person play is available. Train one with "tard train --game ${info.name}".`;
+  const [first, second] = info.players;
+  $('seats').innerHTML = [`${first} (moves first)`, second].map((label, i) =>
+    `<button type="button" data-seat="${i}" class="${i === st.seat ? 'on' : ''}">${esc(label)}</button>`).join('');
+  $('seat-field').hidden = st.mode !== 'computer';
+  $('model-field').hidden = st.mode !== 'computer';
+  $('cvc-fields').hidden = st.mode !== 'cvc';
+  $('strength-field').hidden = st.mode === 'human';
+  $('model').innerHTML = modelOptions(info.models, st.model[st.game] || info.models[0]?.id);
+  $('model-a').innerHTML = modelOptions(info.models, st.modelA[st.game] || info.models[0]?.id);
+  $('model-b').innerHTML = modelOptions(info.models, st.modelB[st.game] || info.models[0]?.id);
+  $('model-a-label').textContent = `${first}'s model (moves first)`;
+  $('model-b-label').textContent = `${second}'s model`;
+  $('back').hidden = !S.cfg;
+}
+
+// ---------- play screen ----------
+
+function render(){
+  if ($('play').hidden || !S.cfg) return;
+  const kind = S.view?.position.kind;
+  $('board-card').className = `board-card ${kind === 'hive' ? 'hive' : 'grid'}`;
+  if (kind === 'hive') renderHive(); else renderGrid();
+  renderPanel();
+}
+
+// Grid games (MiniPente, Pente): stones on the points of a rows x cols grid.
+function renderGrid(){
+  const svg = $('board');
+  const v = S.view;
+  if (!v){ svg.innerHTML = ''; return; }
+  const P = v.position, R = P.rows, C = P.cols;
+  svg.setAttribute('viewBox', `0 0 ${C + 0.65} ${R + 0.65}`);
+  svg.classList.toggle('locked', !humanCanMove());
+  const legalAt = new Map(v.legal.map((l) => [l.row * C + l.col, l.action]));
+  const stoneAt = (r, c) => P.board[r][c];
+  const stone = (x, y, color, extra = '') =>
+    `<circle cx="${x}" cy="${y}" r=".44" fill="url(#g-${color === 'B' ? 'black' : 'white'})" stroke="rgba(0,0,0,.45)" stroke-width=".03" ${extra}/>`;
+
+  let lines = '';
+  for (let i = 0; i < R; i++) lines += `<line x1="1" y1="${i + 1}" x2="${C}" y2="${i + 1}"/>`;
+  for (let i = 0; i < C; i++) lines += `<line x1="${i + 1}" y1="1" x2="${i + 1}" y2="${R}"/>`;
+  const starPoints = R === 19 ? [3, 9, 15].flatMap((r) => [3, 9, 15].map((c) => [r, c]))
+    : R === 9 ? [[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]] : [[Math.floor(R / 2), Math.floor(C / 2)]];
+  const stars = starPoints.map(([r, c]) => `<circle cx="${c + 1}" cy="${r + 1}" r="${R > 9 ? .1 : .07}" fill="var(--line)"/>`).join('');
+  let labels = '';
+  for (let i = 0; i < C; i++) labels += `<text x="${i + 1}" y=".42">${i}</text>`;
+  for (let i = 0; i < R; i++) labels += `<text x=".38" y="${i + 1}">${i}</text>`;
+
+  let pieces = '';
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++){
+    if (stoneAt(r, c) !== '.') pieces += stone(c + 1, r + 1, stoneAt(r, c));
+  }
+  // Empty points that aren't legal right now (Pente's opening rule) get a faint cross.
+  if (humanCanMove()){
+    for (let r = 0; r < R; r++) for (let c = 0; c < C; c++){
+      if (stoneAt(r, c) === '.' && !legalAt.has(r * C + c)){
+        pieces += `<path d="M${c + .85} ${r + .85}l.3 .3M${c + 1.15} ${r + .85}l-.3 .3" stroke="var(--line)" stroke-width=".05" opacity=".35"/>`;
+      }
+    }
+  }
+  const ringed = S.showSearch && S.ai && v.last && S.ai.search.some((s) => s.row === v.last.row && s.col === v.last.col);
+  if (v.last && !ringed && stoneAt(v.last.row, v.last.col) !== '.'){
+    const ring = stoneAt(v.last.row, v.last.col) === 'B' ? '#f2efe8' : '#2a2724';
+    pieces += `<circle cx="${v.last.col + 1}" cy="${v.last.row + 1}" r=".16" fill="none" stroke="${ring}" stroke-width=".06"/>`;
+  }
+  if (S.hover && humanCanMove() && legalAt.has(S.hover[0] * C + S.hover[1])){
+    pieces += stone(S.hover[1] + 1, S.hover[0] + 1, v.to_move === 'Black' ? 'B' : 'W', 'opacity=".45"');
+  }
+
+  let heat = '';
+  if (S.showSearch && S.ai){
+    // The most-searched points, down to 1% of the search.
+    for (const s of S.ai.search.slice(0, 20)){
+      if (s.row === undefined || s.share < 0.01) continue;
+      if (stoneAt(s.row, s.col) !== '.'){
+        heat += `<circle cx="${s.col + 1}" cy="${s.row + 1}" r=".47" fill="none" stroke="var(--heat)" stroke-width=".07"/>`;
+      }else{
+        heat += `<circle cx="${s.col + 1}" cy="${s.row + 1}" r="${(0.14 + 0.26 * Math.sqrt(s.share)).toFixed(3)}" fill="var(--heat)" fill-opacity="${(0.2 + 0.45 * s.share).toFixed(3)}" stroke="none"/>`;
+      }
+      if (s.share >= 0.02) heat += `<text x="${s.col + 1}" y="${s.row + 1}">${Math.round(s.share * 100)}</text>`;
+    }
+  }
+
+  let hits = '';
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++){
+    hits += `<rect class="hit" data-r="${r}" data-c="${c}" x="${c + 0.5}" y="${r + 0.5}" width="1" height="1"/>`;
+  }
+  svg.innerHTML = `
+    <defs>
+      <radialGradient id="g-black" cx=".35" cy=".3" r=".75"><stop offset="0" stop-color="#5a5a5a"/><stop offset=".55" stop-color="#151515"/><stop offset="1" stop-color="#050505"/></radialGradient>
+      <radialGradient id="g-white" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#ffffff"/><stop offset=".7" stop-color="#e4e0d7"/><stop offset="1" stop-color="#c9c4b8"/></radialGradient>
+    </defs>
+    <g stroke="var(--line)" stroke-width="${R > 9 ? .045 : .035}" stroke-linecap="square">${lines}</g>
+    ${stars}
+    <g fill="var(--line)" font-size="${R > 9 ? .42 : .32}" text-anchor="middle" dominant-baseline="central" font-family="system-ui, sans-serif" opacity=".75">${labels}</g>
+    ${pieces}
+    <g pointer-events="none" font-size=".3" font-weight="700" text-anchor="middle" dominant-baseline="central" font-family="system-ui, sans-serif" fill="#fff" stroke="rgba(0,0,0,.55)" stroke-width=".05" paint-order="stroke">${heat}</g>
+    ${hits}`;
+}
+
+// Hive: hex tiles in axial coordinates (pointy-top; row r shifted right by r/2).
+const SQRT3 = Math.sqrt(3);
+const BUG_COLORS = { Q: ['#b8860b', '#f0c24a'], S: ['#8b4a1c', '#e09a62'], B: ['#6b3fa0', '#c39bf0'], G: ['#2f7d32', '#86d38a'], A: ['#1f5fa8', '#7fb6f2'] };
+const hexCenter = (q, r) => [SQRT3 * (q + r / 2), 1.5 * r];
+const hexPoints = (cx, cy, s) => [0, 1, 2, 3, 4, 5].map((k) => {
+  const a = Math.PI / 180 * (60 * k - 30);
+  return `${(cx + s * Math.cos(a)).toFixed(3)},${(cy + s * Math.sin(a)).toFixed(3)}`;
+}).join(' ');
+
+// One bug tile: the piece name's color (w/b), kind letter and number.
+// `outline` replaces the tile's edge (e.g. to mark the selected piece).
+function bugTile(cx, cy, name, { size = 0.94, outline = null, height = 1 } = {}){
+  const white = name[0] === 'w', kind = name[1], num = name.slice(2);
+  const ink = BUG_COLORS[kind][white ? 0 : 1];
+  const [edge, edgeWidth] = outline || [`var(--tile-${white ? 'w' : 'b'}-edge)`, .06];
+  let svg = `<polygon points="${hexPoints(cx, cy, size)}" fill="var(--tile-${white ? 'w' : 'b'})" stroke="${edge}" stroke-width="${edgeWidth}"/>`;
+  svg += `<text x="${cx - (num ? .1 : 0)}" y="${cy + .04}" fill="${ink}" font-size=".78" font-weight="800">${kind}</text>`;
+  if (num) svg += `<text x="${cx + .38}" y="${cy + .28}" fill="${ink}" font-size=".34" font-weight="700">${num}</text>`;
+  if (height > 1){
+    svg += `<circle cx="${cx + .5}" cy="${cy - .55}" r=".24" fill="var(--accent)"/><text x="${cx + .5}" y="${cy - .53}" fill="var(--on-accent)" font-size=".3" font-weight="700">${height}</text>`;
+  }
+  return svg;
+}
+
+function renderHive(){
+  const svg = $('board');
+  const v = S.view, P = v.position;
+  svg.classList.remove('locked');
+  const key = (q, r) => `${q},${r}`;
+  const cells = new Map(P.cells.map((c) => [key(c.q, c.r), c]));
+  const moves = v.legal.filter((l) => !l.pass);
+  const dests = S.sel ? moves.filter((l) => l.piece === S.sel) : [];
+
+  // Frame the hive plus a ring of cells around it: every legal destination
+  // touches the hive, so the view never cuts one off or jumps when selecting.
+  const pts = (P.cells.length ? P.cells : moves).map((c) => hexCenter(c.q, c.r));
+  if (!pts.length) pts.push([0, 0]);
+  const pad = P.cells.length ? 2.8 : 1.2;
+  let [x0, x1, y0, y1] = [Math.min(...pts.map((p) => p[0])) - pad, Math.max(...pts.map((p) => p[0])) + pad,
+                          Math.min(...pts.map((p) => p[1])) - pad, Math.max(...pts.map((p) => p[1])) + pad];
+  let w = Math.max(x1 - x0, 10), h = Math.max(y1 - y0, 7.5);
+  if (w / h > 4 / 3) h = w * 3 / 4; else w = h * 4 / 3;
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  svg.setAttribute('viewBox', `${(cx - w / 2).toFixed(2)} ${(cy - h / 2).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)}`);
+
+  const lastPiece = v.last?.piece;
+  let tiles = '';
+  for (const c of P.cells){
+    const [x, y] = hexCenter(c.q, c.r);
+    const top = c.stack[c.stack.length - 1];
+    const selectable = humanCanMove() && moves.some((l) => l.piece === top);
+    const outline = top === S.sel ? ['var(--dest)', .2] : top === lastPiece ? ['var(--last)', .16] : null;
+    tiles += `<g data-q="${c.q}" data-r="${c.r}"${selectable ? '' : ' style="cursor:default"'}><title>${esc(c.stack.slice().reverse().join(' on '))}</title>${bugTile(x, y, top, { height: c.stack.length, outline })}</g>`;
+  }
+  let targets = '';
+  for (const d of dests){
+    const [x, y] = hexCenter(d.q, d.r);
+    targets += `<polygon data-action="${d.action}" points="${hexPoints(x, y, .9)}" fill="var(--dest)" fill-opacity=".22" stroke="var(--dest)" stroke-width=".07" stroke-dasharray=".2 .12"><title>${esc(d.text)}</title></polygon>`;
+  }
+  let empty = '';
+  if (!P.cells.length && !dests.length){
+    empty = `<text x="0" y="0" fill="var(--muted)" font-size=".5">Pick a piece from the hand to place it</text>`;
+  }
+  svg.innerHTML = `<g text-anchor="middle" dominant-baseline="central" font-family="system-ui, sans-serif">${tiles}${targets}${empty}</g>`;
+}
+
+function renderHands(){
+  const v = S.view, P = v.position;
+  const moves = v.legal.filter((l) => !l.pass);
+  return v.players.map((player, seat) => {
+    const names = P.hands[player];
+    const kinds = ['Q', 'S', 'B', 'G', 'A'].map((k) => ({ k, names: names.filter((n) => n[1] === k) })).filter((x) => x.names.length);
+    const tiles = kinds.map(({ k, names: ns }) => {
+      const legal = humanCanMove() && player === v.to_move ? moves.find((l) => ns.includes(l.piece)) : null;
+      const piece = legal ? legal.piece : ns[0];
+      const badge = ns.length > 1 ? `<text x="1.05" y="-.75" font-size=".5" font-weight="700" fill="var(--muted)">×${ns.length}</text>` : '';
+      return `<button type="button" data-piece="${esc(piece)}" class="${piece === S.sel ? 'sel' : ''}" ${legal ? '' : 'disabled'} title="${esc(ns.join(', '))}">
+        <svg width="${ns.length > 1 ? 50 : 38}" height="40" viewBox="${ns.length > 1 ? '-1.05 -1.05 2.65 2.1' : '-1.05 -1.05 2.1 2.1'}" text-anchor="middle" dominant-baseline="central" font-family="system-ui, sans-serif" style="opacity:${legal || !(humanCanMove() && player === v.to_move) ? 1 : .45}">${bugTile(0, 0, ns[0].slice(0, 2), { size: .98 })}${badge}</svg></button>`;
+    }).join('');
+    const who = whoLabel(seat);
+    return `<div class="who"><span class="dot ${player}"></span>${esc(player)} ${who}</div>
+      <div class="hand">${tiles || '<span class="empty">All pieces placed</span>'}</div>`;
+  }).join('');
+}
+
+function whoLabel(seat){
+  if (S.cfg.mode === 'human') return '';
+  if (!isComputer(seat)) return '(you)';
+  return S.cfg.mode === 'cvc' ? `(${esc(modelLabel(S.cfg.models[seat]))})` : '(computer)';
+}
+
+function renderPanel(){
+  const v = S.view, cfg = S.cfg, info = gameInfo(cfg.game);
+  const status = $('status'), sub = $('substatus');
+  if (!v){
+    status.innerHTML = '<span class="spinner"></span> Loading…';
+    sub.textContent = '';
+  }else if (v.over){
+    const winner = v.result.endsWith(' wins') ? v.result.slice(0, -5) : null;
+    if (cfg.mode === 'computer' && winner) status.textContent = seatOf(winner) === cfg.seat ? 'You win!' : 'The computer wins';
+    else status.textContent = v.result;
+    sub.textContent = cfg.mode === 'cvc' && winner ? `${winner}: ${modelLabel(cfg.models[seatOf(winner)])}` : 'Start a new game to play again.';
+  }else if (S.busy){
+    status.innerHTML = `<span class="spinner"></span> ${esc(v.to_move)} is thinking…`;
+    sub.textContent = `Searching ${cfg.rollouts.toLocaleString()} rollouts with ${modelLabel(cfg.models[seatToMove()])}.`;
+  }else if (cfg.mode === 'cvc' && S.paused){
+    status.textContent = 'Paused';
+    sub.textContent = `${v.to_move} to move. Press Resume to continue.`;
+  }else if (humanCanMove()){
+    status.innerHTML = `<span class="dot ${v.to_move}"></span> ${cfg.mode === 'computer' ? 'Your move' : `${esc(v.to_move)} to move`}`;
+    const onlyPass = v.legal.length === 1 && v.legal[0].pass;
+    sub.textContent = onlyPass ? 'No legal move: you must pass.'
+      : v.position.kind === 'hive' ? (S.sel ? `Pick a highlighted cell for ${S.sel}, or another piece.` : 'Pick a piece from your hand or on the board.')
+      : `${cfg.mode === 'computer' ? `You are ${v.to_move}. ` : ''}Click a point.`;
+  }else{
+    status.textContent = `${v.to_move} to move`;
+    sub.textContent = '';
+  }
+  $('error').textContent = S.error || S.note;
+
+  // Captures (grid games) or the pieces in each hand (Hive).
+  let infoHtml = '';
+  if (v && v.position.kind === 'grid'){
+    infoHtml = `<div class="section-title">Captured pairs</div>` + v.players.map((p, seat) => {
+      const n = v.position.captures[p];
+      return `<div class="cap-row"><span class="who"><span class="dot ${p}"></span>${esc(p)} ${whoLabel(seat)}</span>
+        <span class="pips" aria-label="${n} of 5">${[0, 1, 2, 3, 4].map((i) => `<span class="pip${i < n ? ' on' : ''}"></span>`).join('')}</span></div>`;
+    }).join('');
+  }else if (v && v.position.kind === 'hive'){
+    infoHtml = `<div class="section-title">Pieces in hand</div>${renderHands()}`;
+  }
+  $('game-info').innerHTML = infoHtml;
+
+  // The last computer move's evaluation, from the side of the player who made it.
+  const ai = S.ai;
+  $('eval-box').hidden = cfg.mode === 'human';
+  if (cfg.mode !== 'human'){
+    const fill = $('meter-fill'), text = $('eval-text');
+    if (ai){
+      const e = Math.max(-1, Math.min(1, ai.eval));
+      const mover = seatOf(ai.player), other = v.players[1 - mover];
+      $('eval-title').textContent = cfg.mode === 'cvc' ? `${ai.player}'s view` : "Computer's view";
+      $('meter-left').textContent = cfg.mode === 'cvc' ? `${other} ahead` : "You're ahead";
+      $('meter-right').textContent = `${cfg.mode === 'cvc' ? ai.player : 'Computer'} ahead`;
+      fill.style.width = `${Math.abs(e) * 50}%`;
+      fill.style.left = e >= 0 ? '50%' : `${50 - Math.abs(e) * 50}%`;
+      const verdict = e > 0.15 ? 'thinks it is ahead' : e < -0.15 ? 'thinks it is behind' : 'thinks it is roughly even';
+      text.textContent = `${ai.player} ${verdict} (${e >= 0 ? '+' : ''}${e.toFixed(2)}) after playing ${ai.text}: ${ai.seconds.toFixed(1)} s, ${ai.rollouts.toLocaleString()} rollouts.`;
+    }else{
+      fill.style.width = '0';
+      $('meter-left').textContent = ''; $('meter-right').textContent = '';
+      text.textContent = 'Shown after the computer moves.';
+    }
+  }
+  $('search-toggle').hidden = cfg.mode === 'human';
+  $('search-box').hidden = !(S.showSearch && ai);
+  if (S.showSearch && ai){
+    $('search-list').innerHTML = ai.search.slice(0, 6).map((s) => `
+      <div class="item"><span class="name">${esc(s.text)}<span class="bar" style="width:${Math.max(2, s.share * 100)}%"></span></span>
+      <span class="pct">${(s.share * 100).toFixed(s.share < .1 ? 1 : 0)}%</span></div>`).join('');
+  }
+
+  const hist = v ? v.history : [];
+  const rows = [];
+  for (let i = 0; i < hist.length; i += 2){
+    rows.push(`<div><span class="n">${i / 2 + 1}.</span><span class="m">${esc(hist[i])}</span>${hist[i + 1] !== undefined ? esc(hist[i + 1]) : ''}</div>`);
+  }
+  const box = $('moves');
+  box.innerHTML = rows.join('') || '<span>No moves yet.</span>';
+  box.scrollTop = box.scrollHeight;
+
+  const passOnly = humanCanMove() && v.legal.length === 1 && v.legal[0].pass;
+  $('pass').hidden = !passOnly;
+  $('undo').hidden = cfg.mode === 'cvc';
+  $('undo').disabled = !canUndo();
+  $('pause').hidden = cfg.mode !== 'cvc' || !v || v.over;
+  $('pause').textContent = S.paused ? 'Resume' : 'Pause';
+  $('new-game').disabled = false;
+  $('footer').textContent = `${info.title} · ` + (cfg.mode === 'computer' ? `Computer: ${modelLabel(cfg.models[1 - cfg.seat])}`
+    : cfg.mode === 'cvc' ? `${info.players[0]}: ${modelLabel(cfg.models[0])} · ${info.players[1]}: ${modelLabel(cfg.models[1])}`
+    : 'Two players on this screen');
+}
+
+// ---------- events ----------
+
+$('games').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-game]');
+  if (!b) return;
+  S.setup.game = b.dataset.game;
+  S.setup.seat = 0;
+  renderSetup();
+});
+$('modes').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-mode]');
+  if (b && !b.disabled){ S.setup.mode = b.dataset.mode; renderSetup(); }
+});
+$('seats').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-seat]');
+  if (b){ S.setup.seat = Number(b.dataset.seat); renderSetup(); }
+});
+$('model').addEventListener('change', (e) => { S.setup.model[S.setup.game] = e.target.value; });
+$('model-a').addEventListener('change', (e) => { S.setup.modelA[S.setup.game] = e.target.value; });
+$('model-b').addEventListener('change', (e) => { S.setup.modelB[S.setup.game] = e.target.value; });
+$('start').addEventListener('click', startGame);
+$('back').addEventListener('click', () => showScreen('play'));
+$('new-game').addEventListener('click', async () => {
+  // Pick up models trained since the page loaded.
+  try { S.catalog = await api('/api/games'); } catch (e) { /* keep the old list */ }
+  if (S.cfg?.mode === 'cvc') S.paused = true;
+  showScreen('setup');
+});
+$('undo').addEventListener('click', undo);
+$('pass').addEventListener('click', () => { const p = S.view.legal.find((l) => l.pass); if (p) play(p.action); });
+$('pause').addEventListener('click', () => {
+  S.paused = !S.paused;
+  if (S.paused){ S.token++; S.busy = false; render(); }
+  else advance(S.view.moves);
+});
+$('show-search').addEventListener('change', (e) => { S.showSearch = e.target.checked; render(); });
+
+$('board').addEventListener('click', (e) => {
+  if (!S.view) return;
+  const point = e.target.closest('.hit');
+  if (point){
+    if (!humanCanMove()) return;
+    const r = Number(point.dataset.r), c = Number(point.dataset.c);
+    const l = S.view.legal.find((x) => x.row === r && x.col === c);
+    if (l) play(l.action);
+    else if (S.view.position.board[r][c] === '.'){ S.note = "That point isn't a legal move right now."; render(); }
+    return;
+  }
+  const dest = e.target.closest('[data-action]');
+  if (dest){ play(Number(dest.dataset.action)); return; }
+  const tile = e.target.closest('[data-q]');
+  if (tile && humanCanMove()){
+    const cell = S.view.position.cells.find((c) => String(c.q) === tile.dataset.q && String(c.r) === tile.dataset.r);
+    const top = cell.stack[cell.stack.length - 1];
+    if (S.view.legal.some((l) => l.piece === top)){ S.sel = S.sel === top ? null : top; S.note = ''; render(); }
+  }
+});
+$('board').addEventListener('pointerover', (e) => {
+  const t = e.target.closest('.hit');
+  const next = t ? [Number(t.dataset.r), Number(t.dataset.c)] : null;
+  if (String(next) !== String(S.hover)){ S.hover = next; if (S.view?.position.kind === 'grid') renderGrid(); }
+});
+$('board').addEventListener('pointerleave', () => { S.hover = null; if (S.view?.position.kind === 'grid') renderGrid(); });
+$('game-info').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-piece]');
+  if (!b || b.disabled) return;
+  S.sel = S.sel === b.dataset.piece ? null : b.dataset.piece;
+  S.note = '';
+  render();
+});
+
+(async function start(){
+  try{
+    S.catalog = await api('/api/games');
+  }catch(e){
+    $('setup').hidden = false;
+    $('setup-error').textContent = `Can't reach the server: ${e.message}`;
+    return;
+  }
+  const choices = [...new Set([200, 800, S.catalog.rollouts, 10000])].filter((n) => n <= S.catalog.max_rollouts).sort((a, b) => a - b);
+  $('strength').innerHTML = choices.map((n) =>
+    `<option value="${n}"${n === S.catalog.rollouts ? ' selected' : ''}>${n.toLocaleString()} rollouts${n === S.catalog.rollouts ? ' (default)' : ''}</option>`).join('');
+  const withModels = S.catalog.games.find((g) => g.models.length);
+  if (withModels) S.setup.game = withModels.name;
+  showScreen('setup');
+})();
+</script>
+</body>
+</html>

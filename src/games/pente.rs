@@ -14,7 +14,7 @@
 use std::fmt;
 use tracing::trace;
 
-use crate::games::{Action, GameState, TextGame};
+use crate::games::{Action, GameState, TextGame, WebGame};
 use crate::games::parse_coord;
 use crate::model::NetConfig;
 
@@ -285,6 +285,31 @@ pub fn coord_2_action(row: usize, col: usize) -> Action{
 
 pub fn action_2_coord(action: Action) -> (usize, usize){
     return (action / COLS, action % COLS);
+}
+
+
+impl WebGame for PenteState{
+    // {"kind": "grid", "rows", "cols", "board": one string per row ('.', 'B', 'W'),
+    //  "captures": pairs captured by each player}
+    fn position_json(&self) -> serde_json::Value{
+        let board: Vec<String> = (0..ROWS).map(|r| (0..COLS).map(|c| match self.board_[r][c]{
+            Piece::Empty => '.',
+            Piece::Black => 'B',
+            Piece::White => 'W',
+        }).collect()).collect();
+        return serde_json::json!({
+            "kind": "grid",
+            "rows": ROWS,
+            "cols": COLS,
+            "board": board,
+            "captures": { "Black": self.b_caps_, "White": self.w_caps_ },
+        });
+    }
+
+    fn action_json(&self, action: Action) -> serde_json::Value{
+        let (row, col) = action_2_coord(action);
+        return serde_json::json!({ "row": row, "col": col });
+    }
 }
 
 

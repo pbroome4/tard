@@ -4,7 +4,7 @@
 use std::{fmt};
 use tracing::trace;
 
-use crate::games::{Action, GameState, TextGame};
+use crate::games::{Action, GameState, TextGame, WebGame};
 use crate::games::parse_coord;
 use crate::model::NetConfig;
 
@@ -170,16 +170,6 @@ impl MiniPenteState{
         return self.is_black_;
     }
 
-    // The stone at (row, col). Panics if that's off the board.
-    pub fn piece(&self, row: usize, col: usize) -> Piece{
-        return self.board_[row][col];
-    }
-
-    // Pairs captured so far: (by Black, by White).
-    pub fn captures(&self) -> (u8, u8){
-        return (self.b_caps_, self.w_caps_);
-    }
-
     // If current player played at row,col, would it be connect-5
     fn is_con5(&self, row: usize, col: usize) -> bool{
         let active = self.get_active_piece();
@@ -302,6 +292,31 @@ impl TextGame for MiniPenteState{
     fn action_text(&self, action: Action) -> String{
         let (row, col) = action_2_coord(action);
         return format!("{}, {}", row, col);
+    }
+}
+
+
+impl WebGame for MiniPenteState{
+    // {"kind": "grid", "rows", "cols", "board": one string per row ('.', 'B', 'W'),
+    //  "captures": pairs captured by each player}
+    fn position_json(&self) -> serde_json::Value{
+        let board: Vec<String> = (0..ROWS).map(|r| (0..COLS).map(|c| match self.board_[r][c]{
+            Piece::Empty => '.',
+            Piece::Black => 'B',
+            Piece::White => 'W',
+        }).collect()).collect();
+        return serde_json::json!({
+            "kind": "grid",
+            "rows": ROWS,
+            "cols": COLS,
+            "board": board,
+            "captures": { "Black": self.b_caps_, "White": self.w_caps_ },
+        });
+    }
+
+    fn action_json(&self, action: Action) -> serde_json::Value{
+        let (row, col) = action_2_coord(action);
+        return serde_json::json!({ "row": row, "col": col });
     }
 }
 

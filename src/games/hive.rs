@@ -37,7 +37,7 @@
 use std::fmt;
 use tracing::trace;
 
-use crate::games::{Action, GameState, TextGame};
+use crate::games::{Action, GameState, TextGame, WebGame};
 use crate::model::NetConfig;
 
 /// Side length of the square frame. 22 pieces span at most 22 cells in any
@@ -709,6 +709,42 @@ impl TextGame for HiveState{
     }
 }
 
+
+impl WebGame for HiveState{
+    // {"kind": "hive", "cells": [{"q", "r", "stack": piece names, bottom first}],
+    //  "hands": {"White": [...], "Black": [...]}}. (q, r) are axial
+    // coordinates in the current frame, which shifts as the hive is
+    // re-centered, so they only mean something within one position.
+    fn position_json(&self) -> serde_json::Value{
+        let g = self.grid();
+        let cells: Vec<serde_json::Value> = (0..CELLS).filter(|&c| g.height[c] > 0).map(|c|{
+            let (q, r) = cell_qr(c);
+            let stack: Vec<String> = (0..g.height[c] as usize).map(|l|{
+                let id = g.stack[c][l] as usize;
+                Self::piece_name(id / PIECES, id % PIECES)
+            }).collect();
+            serde_json::json!({ "q": q, "r": r, "stack": stack })
+        }).collect();
+        let hand = |p: usize| -> Vec<String>{
+            (0..PIECES).filter(|&i| self.pos_[p][i].is_none()).map(|i| Self::piece_name(p, i)).collect()
+        };
+        return serde_json::json!({
+            "kind": "hive",
+            "cells": cells,
+            "hands": { "White": hand(WHITE), "Black": hand(BLACK) },
+        });
+    }
+
+    // {"piece", "q", "r"}: the piece placed or moved and where it goes, or
+    // {"pass": true}.
+    fn action_json(&self, action: Action) -> serde_json::Value{
+        if action == PASS{
+            return serde_json::json!({ "pass": true });
+        }
+        let (q, r) = cell_qr(action % CELLS);
+        return serde_json::json!({ "piece": Self::piece_name(self.to_move(), action / CELLS), "q": q, "r": r });
+    }
+}
 
 impl fmt::Display for HiveState{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result{
