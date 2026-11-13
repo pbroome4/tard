@@ -79,18 +79,17 @@ impl Default for UtttState {
 }
 
 // Input planes, from the side to move's perspective.
-// No plane says where the side to move may play: the network has to work
-// that out itself.
 const PLANE_MINE: usize = 0; // my marks
 const PLANE_THEIRS: usize = 1; // the opponent's marks
-const PLANE_WON_MINE: usize = 2; // small boards I've won (the whole 3x3 block)
-const PLANE_WON_THEIRS: usize = 3; // small boards the opponent has won
-const PLANE_TIED: usize = 4; // tied small boards
+const PLANE_LEGAL: usize = 2; // where I may play (shows the board I'm sent to)
+const PLANE_WON_MINE: usize = 3; // small boards I've won (the whole 3x3 block)
+const PLANE_WON_THEIRS: usize = 4; // small boards the opponent has won
+const PLANE_TIED: usize = 5; // tied small boards
 
 impl GameState for UtttState {
     const NAME: &'static str = "uttt";
     const ACTN_SPC_SIZE: usize = ROWS * COLS;
-    const N_CHAN: usize = 5;
+    const N_CHAN: usize = 6;
     const ROWS: usize = ROWS;
     const COLS: usize = COLS;
 
@@ -98,6 +97,7 @@ impl GameState for UtttState {
         let plane = ROWS * COLS;
         let mut t = vec![0.0; Self::N_CHAN * plane];
         let (mine, theirs) = (self.active_mark(), self.inactive_mark());
+        let legal = self.legal_actions_mask();
         for row in 0..ROWS {
             for col in 0..COLS {
                 let i = row * COLS + col;
@@ -106,6 +106,9 @@ impl GameState for UtttState {
                     t[PLANE_MINE * plane + i] = 1.0;
                 } else if cell == theirs {
                     t[PLANE_THEIRS * plane + i] = 1.0;
+                }
+                if legal[i] {
+                    t[PLANE_LEGAL * plane + i] = 1.0;
                 }
                 let decided = match self.boards_[board_of(row, col)] {
                     Board::Open => None,
@@ -585,11 +588,16 @@ mod tests {
         let at = |p: usize, r: usize, c: usize| t[p * plane + r * 9 + c];
         assert_eq!(at(PLANE_THEIRS, 1, 1), 1.0, "X's mark, seen by O");
         assert_eq!(at(PLANE_MINE, 1, 1), 0.0);
-        // The forced board isn't encoded: nothing marks the center board O must play in.
+        // The legal plane marks exactly the cells O may play: the center board.
+        let legal = s.legal_actions_mask();
+        for a in 0..81 {
+            assert_eq!(t[PLANE_LEGAL * plane + a], if legal[a] { 1.0 } else { 0.0 });
+        }
         assert_eq!(
-            t.iter().filter(|&&x| x != 0.0).count(),
-            1,
-            "only X's one mark"
+            t[PLANE_LEGAL * plane..(PLANE_LEGAL + 1) * plane]
+                .iter()
+                .sum::<f32>(),
+            9.0
         );
     }
 
