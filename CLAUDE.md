@@ -14,6 +14,7 @@ cargo run --release --bin tard -- --mode batched   # self-play training (src/mai
 cargo run --release --bin inference -- --model model.bpk   # play against a trained model (default ./model.bpk)
 cargo run --release --bin arena -- --model-a a.bpk --model-b b.bpk   # model-vs-model match: W/L/D, per-color results, Elo estimate (--games 20, --rollouts 800 or --rollouts-a/-b, --temp-moves 4, --threads 4, --show; --watch prints every move live, one game at a time, --delay-ms paces it)
 cargo run --release --bin interactive -- --game pente   # human-vs-human in the terminal (no AI); --game minipente (default), pente or hive
+cargo run --release --bin web -- --model model.bpk   # play MiniPente against a model in the browser at http://127.0.0.1:8080 (--rollouts 3000, --port, --host)
 ```
 
 - burn is built with the `cuda`, `fusion`, and `flex` features; `Device::default()` picks the backend.
@@ -68,3 +69,4 @@ Key abstractions:
 - Every game's `apply_action` panics (`assert!`, in release builds too) on an illegal action. Callers should pick actions from `legal_actions_mask` or check `is_legal_action` (or `TextGame::parse_action`, which only returns legal actions); the Pente games' `play(row, col)` is a non-panicking variant that returns `false` instead.
 - Pente is much heavier than MiniPente: each replay-buffer position holds 4×361 + 361 floats (~7 KB), so the default buffer (`--buffer-iters 10` × 32,768 positions) needs ~2.4 GB of RAM, and every evaluation runs the bigger network on a 19×19 board.
 - Hive is heavy on memory: each replay-buffer position holds 37×576 input floats plus a 6337-float posterior (~110 KB), so the default buffer (`--buffer-iters 10` × 32,768 positions) would need ~36 GB of RAM. Shrink it (`--buffer-iters`, or `--steps-per-iter`/`--batch-size`/`--sample-reuse`, which set the per-iteration size). Also pass `--dirichlet-alpha` (e.g. 0.3): the default, 20 / action-space size, is ~0.003 for Hive's 6337 actions, far below what its ~20-100 legal moves call for.
+- The `web` bin (`src/bin/web.rs`, a `tiny_http` server) serves `web/minipente.html`, which is compiled in with `include_str!` (rebuild after editing it). It is stateless: the page POSTs the whole move list to `/api/play` (`ai: true` asks for the computer's reply), and the server replays it with `MiniPenteState` (rejecting illegal moves) and runs `mcts` with the loaded model. It handles one request at a time and listens on 127.0.0.1 by default.

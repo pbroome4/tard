@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiniPente vs Tard</title>
+<style>
+  :root{
+    --bg: #f3efe7;
+    --panel: #fffdf9;
+    --text: #22201c;
+    --muted: #6d675d;
+    --border: #e2dbcd;
+    --accent: #2d6a4f;
+    --accent-soft: #d8eadf;
+    --danger: #a4372b;
+    --board: #dcae63;
+    --board-edge: #b88a42;
+    --line: #5a4120;
+    --heat: #1f6feb;
+    --shadow: 0 1px 2px rgba(40, 30, 10, .06), 0 8px 24px rgba(40, 30, 10, .08);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg: #141311;
+      --panel: #1e1c19;
+      --text: #ece7de;
+      --muted: #a29b8f;
+      --border: #35312b;
+      --accent: #74c69d;
+      --accent-soft: #23352b;
+      --danger: #f08b7d;
+      --board: #c99a50;
+      --board-edge: #9c7232;
+      --line: #4a3418;
+      --heat: #58a6ff;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg: #141311;
+    --panel: #1e1c19;
+    --text: #ece7de;
+    --muted: #a29b8f;
+    --border: #35312b;
+    --accent: #74c69d;
+    --accent-soft: #23352b;
+    --danger: #f08b7d;
+    --board: #c99a50;
+    --board-edge: #9c7232;
+    --line: #4a3418;
+    --heat: #58a6ff;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35);
+    color-scheme: dark;
+  }
+
+  *{ box-sizing: border-box; }
+  body{
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap{ max-width: 960px; margin: 0 auto; padding: 24px 16px 40px; }
+  header{ display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  h1{ font-size: 24px; margin: 0; letter-spacing: -.01em; }
+  header .sub{ color: var(--muted); font-size: 14px; }
+
+  .layout{ display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
+  @media (max-width: 820px){ .layout{ grid-template-columns: minmax(0, 1fr); } }
+
+  .board-card{
+    background: var(--board);
+    border: 1px solid var(--board-edge);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 10px;
+    max-width: 600px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  svg#board{ display: block; width: 100%; height: auto; touch-action: manipulation; user-select: none; }
+  svg#board .hit{ fill: transparent; cursor: pointer; }
+  svg#board.locked .hit{ cursor: default; }
+
+  .panel{
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 16px;
+    display: grid;
+    gap: 16px;
+  }
+  .status{ font-size: 18px; font-weight: 600; min-height: 1.45em; display: flex; align-items: center; gap: 8px; }
+  .status .dot{ width: 14px; height: 14px; border-radius: 50%; flex: none; border: 1px solid rgba(0,0,0,.35); }
+  .dot.black{ background: radial-gradient(circle at 35% 30%, #555, #111 60%); }
+  .dot.white{ background: radial-gradient(circle at 35% 30%, #fff, #d6d3cc 70%); }
+  .spinner{ width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+  .muted{ color: var(--muted); font-size: 13px; }
+  .error{ color: var(--danger); font-size: 13px; }
+
+  .section-title{ font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
+  .caps{ display: grid; gap: 6px; }
+  .cap-row{ display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .cap-row .who{ display: flex; align-items: center; gap: 8px; }
+  .pips{ display: flex; gap: 4px; }
+  .pip{ width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--border); }
+  .pip.on{ background: var(--accent); border-color: var(--accent); }
+
+  .meter{ position: relative; height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; }
+  .meter .fill{ position: absolute; top: 0; bottom: 0; background: var(--accent); }
+  .meter .mid{ position: absolute; left: 50%; top: -2px; bottom: -2px; width: 2px; background: var(--muted); opacity: .6; }
+  .meter-labels{ display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  .controls{ display: grid; gap: 10px; }
+  .row{ display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button, select{
+    font: inherit; font-size: 14px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 8px; padding: 7px 12px; cursor: pointer;
+  }
+  button:hover:not(:disabled), select:hover:not(:disabled){ border-color: var(--accent); }
+  button:disabled, select:disabled{ opacity: .5; cursor: default; }
+  button.primary{ background: var(--accent); border-color: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) button.primary{ color: #10231a; } }
+  :root[data-theme="dark"] button.primary{ color: #10231a; }
+  .seg{ display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button{ border: 0; border-radius: 0; }
+  .seg button + button{ border-left: 1px solid var(--border); }
+  .seg button.on{ background: var(--accent-soft); color: var(--text); font-weight: 600; }
+  label.check{ display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+
+  .moves{ max-height: 150px; overflow: auto; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+  .moves .n{ display: inline-block; width: 2.4em; }
+  footer{ margin-top: 18px; color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>MiniPente</h1>
+    <span class="sub">against Tard &middot; five in a row or five captured pairs wins</span>
+  </header>
+
+  <div class="layout">
+    <div class="board-card">
+      <svg id="board" viewBox="0 0 9.65 9.65" role="grid" aria-label="MiniPente board"></svg>
+    </div>
+
+    <aside class="panel">
+      <div>
+        <div class="status" id="status" aria-live="polite"></div>
+        <div class="muted" id="substatus"></div>
+        <div class="error" id="error"></div>
+      </div>
+
+      <div>
+        <div class="section-title">Captured pairs</div>
+        <div class="caps" id="caps"></div>
+      </div>
+
+      <div id="eval-box">
+        <div class="section-title">Tard's view</div>
+        <div class="meter"><div class="fill" id="meter-fill"></div><div class="mid"></div></div>
+        <div class="meter-labels"><span>You're ahead</span><span>Tard's ahead</span></div>
+        <div class="muted" id="eval-text"></div>
+      </div>
+
+      <div class="controls">
+        <div>
+          <div class="section-title">New game</div>
+          <div class="row">
+            <div class="seg" role="group" aria-label="Your color">
+              <button id="as-black" type="button">Play Black</button>
+              <button id="as-white" type="button">Play White</button>
+            </div>
+          </div>
+          <div class="muted" style="margin-top:4px">Black moves first.</div>
+        </div>
+        <div class="row">
+          <label class="muted" for="strength">Search</label>
+          <select id="strength"></select>
+          <button id="undo" type="button">Undo</button>
+        </div>
+        <label class="check"><input type="checkbox" id="show-search"> Show Tard's search for its last move</label>
+      </div>
+
+      <div>
+        <div class="section-title">Moves (row, col)</div>
+        <div class="moves" id="moves"></div>
+      </div>
+    </aside>
+  </div>
+  <footer id="footer"></footer>
+</div>
+
+<script>
+const N = 9;
+const $ = (id) => document.getElementById(id);
+const turnOf = (n) => (n % 2 === 0 ? 'Black' : 'White');
+const other = (c) => (c === 'Black' ? 'White' : 'Black');
+
+const S = {
+  info: null,
+  human: 'Black',
+  moves: [],
+  view: null,
+  ai: null,         // the computer's last move and search
+  busy: false,      // waiting for the computer
+  hover: null,      // [row, col] under the pointer
+  showSearch: false,
+  error: '',
+};
+
+async function api(path, body){
+  const opts = body === undefined ? {} :
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+// Sends the game so far; with ai, the computer also moves.
+async function sync(moves, ai){
+  S.busy = ai;
+  S.error = '';
+  render();
+  try{
+    const v = await api('/api/play', { moves, ai, rollouts: Number($('strength').value) || undefined });
+    S.view = v;
+    S.moves = v.moves;
+    if (v.ai) S.ai = v.ai;
+  }catch(e){
+    S.error = e.message;
+  }
+  S.busy = false;
+  render();
+}
+
+// Shows `moves`, then lets the computer reply if it's its turn.
+async function advance(moves){
+  await sync(moves, false);
+  if (S.view && !S.view.over && S.view.to_move !== S.human) await sync(S.moves, true);
+}
+
+function newGame(color){
+  if (S.busy) return;
+  S.human = color;
+  S.ai = null;
+  advance([]);
+}
+
+function humanCanMove(){
+  const v = S.view;
+  return v && !S.busy && !v.over && v.to_move === S.human;
+}
+
+function playAt(r, c){
+  if (!humanCanMove()) return;
+  const a = r * N + c;
+  if (!S.view.legal[a]) return;
+  S.hover = null;
+  advance([...S.moves, a]);
+}
+
+function canUndo(){
+  return !S.busy && S.moves.some((_, i) => turnOf(i) === S.human);
+}
+
+function undo(){
+  if (!canUndo()) return;
+  const m = S.moves.slice();
+  do { m.pop(); } while (m.length && turnOf(m.length) !== S.human);
+  S.ai = null;
+  advance(m);
+}
+
+// ---------- rendering ----------
+
+function stone(x, y, color, extra = ''){
+  const fill = color === 'B' ? 'url(#g-black)' : 'url(#g-white)';
+  return `<circle cx="${x}" cy="${y}" r=".44" fill="${fill}" stroke="rgba(0,0,0,.45)" stroke-width=".03" ${extra}/>`;
+}
+
+function renderBoard(){
+  const v = S.view;
+  const svg = $('board');
+  const lines = [];
+  for (let i = 0; i < N; i++){
+    lines.push(`<line x1="1" y1="${i + 1}" x2="${N}" y2="${i + 1}"/>`);
+    lines.push(`<line x1="${i + 1}" y1="1" x2="${i + 1}" y2="${N}"/>`);
+  }
+  const stars = [[4, 4], [2, 2], [2, 6], [6, 2], [6, 6]]
+    .map(([r, c]) => `<circle cx="${c + 1}" cy="${r + 1}" r=".07" fill="var(--line)"/>`).join('');
+  const labels = [];
+  for (let i = 0; i < N; i++){
+    labels.push(`<text x="${i + 1}" y=".42">${i}</text>`);
+    labels.push(`<text x=".38" y="${i + 1}">${i}</text>`);
+  }
+
+  let stones = '';
+  if (v){
+    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++){
+      const p = v.board[r][c];
+      if (p !== '.') stones += stone(c + 1, r + 1, p);
+    }
+    const last = S.moves[S.moves.length - 1];
+    const ringedBySearch = S.showSearch && S.ai && S.ai.visits[last] >= 0.005;
+    if (last !== undefined && !ringedBySearch){
+      const r = Math.floor(last / N), c = last % N;
+      if (v.board[r][c] !== '.'){
+        const ring = v.board[r][c] === 'B' ? '#f2efe8' : '#2a2724';
+        stones += `<circle cx="${c + 1}" cy="${r + 1}" r=".16" fill="none" stroke="${ring}" stroke-width=".06"/>`;
+      }
+    }
+    if (S.hover && humanCanMove()){
+      const [r, c] = S.hover;
+      if (v.legal[r * N + c]) stones += stone(c + 1, r + 1, S.human === 'Black' ? 'B' : 'W', 'opacity=".45"');
+    }
+  }
+
+  let heat = '';
+  if (S.showSearch && S.ai){
+    for (let a = 0; a < S.ai.visits.length; a++){
+      const share = S.ai.visits[a];
+      if (share < 0.005) continue;
+      const r = Math.floor(a / N), c = a % N;
+      if (S.view && S.view.board[r][c] !== '.'){
+        // Usually Tard's own stone: ring it rather than hide it.
+        heat += `<circle cx="${c + 1}" cy="${r + 1}" r=".47" fill="none" stroke="var(--heat)" stroke-width=".07"/>`;
+      }else{
+        const rad = 0.14 + 0.26 * Math.sqrt(share);
+        heat += `<circle cx="${c + 1}" cy="${r + 1}" r="${rad.toFixed(3)}" fill="var(--heat)" fill-opacity="${(0.2 + 0.45 * share).toFixed(3)}" stroke="none"/>`;
+      }
+      if (share >= 0.02){
+        heat += `<text class="pct" x="${c + 1}" y="${r + 1}">${Math.round(share * 100)}</text>`;
+      }
+    }
+  }
+
+  let hits = '';
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++){
+    hits += `<rect class="hit" data-r="${r}" data-c="${c}" x="${c + 0.5}" y="${r + 0.5}" width="1" height="1"/>`;
+  }
+
+  svg.classList.toggle('locked', !humanCanMove());
+  svg.innerHTML = `
+    <defs>
+      <radialGradient id="g-black" cx=".35" cy=".3" r=".75"><stop offset="0" stop-color="#5a5a5a"/><stop offset=".55" stop-color="#151515"/><stop offset="1" stop-color="#050505"/></radialGradient>
+      <radialGradient id="g-white" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#ffffff"/><stop offset=".7" stop-color="#e4e0d7"/><stop offset="1" stop-color="#c9c4b8"/></radialGradient>
+    </defs>
+    <g stroke="var(--line)" stroke-width=".035" stroke-linecap="square">${lines.join('')}</g>
+    ${stars}
+    <g fill="var(--line)" font-size=".32" text-anchor="middle" dominant-baseline="central" font-family="system-ui, sans-serif" opacity=".75">${labels.join('')}</g>
+    ${stones}
+    <g pointer-events="none" font-size=".3" font-weight="700" text-anchor="middle" dominant-baseline="central" font-family="system-ui, sans-serif" fill="#fff" stroke="rgba(0,0,0,.55)" stroke-width=".05" paint-order="stroke">${heat}</g>
+    ${hits}`;
+}
+
+function renderPanel(){
+  const v = S.view;
+  const status = $('status'), sub = $('substatus');
+  if (!v){
+    status.innerHTML = S.error ? 'Not connected' : '<span class="spinner"></span> Loading…';
+    sub.textContent = '';
+  }else if (v.over){
+    const won = v.result === `${S.human} wins`;
+    status.textContent = v.result === 'Draw' ? 'Draw' : (won ? 'You win!' : 'Tard wins');
+    sub.textContent = v.result === 'Draw' ? 'The board is full.' : `${v.result}. Start a new game to play again.`;
+  }else if (S.busy){
+    status.innerHTML = `<span class="spinner"></span> Tard is thinking…`;
+    sub.textContent = `Searching ${Number($('strength').value).toLocaleString()} positions as ${other(S.human)}.`;
+  }else if (v.to_move === S.human){
+    status.innerHTML = `<span class="dot ${S.human.toLowerCase()}"></span> Your move`;
+    sub.textContent = `You are ${S.human}. Click an empty point.`;
+  }else{
+    status.textContent = 'Tard to move';
+    sub.textContent = '';
+  }
+  $('error').textContent = S.error;
+
+  const caps = v ? { Black: v.black_captures, White: v.white_captures } : { Black: 0, White: 0 };
+  $('caps').innerHTML = ['Black', 'White'].map((c) => `
+    <div class="cap-row">
+      <span class="who"><span class="dot ${c.toLowerCase()}"></span>${c}${c === S.human ? ' (you)' : ' (Tard)'}</span>
+      <span class="pips" aria-label="${caps[c]} of 5">${[0, 1, 2, 3, 4].map((i) => `<span class="pip${i < caps[c] ? ' on' : ''}"></span>`).join('')}</span>
+    </div>`).join('');
+
+  const fill = $('meter-fill'), text = $('eval-text');
+  if (S.ai){
+    const e = Math.max(-1, Math.min(1, S.ai.eval));
+    const width = Math.abs(e) * 50;
+    fill.style.width = `${width}%`;
+    fill.style.left = e >= 0 ? '50%' : `${50 - width}%`;
+    const verdict = e > 0.15 ? 'thinks it is ahead' : e < -0.15 ? 'thinks you are ahead' : 'thinks it is roughly even';
+    text.textContent = `Tard ${verdict} (${e >= 0 ? '+' : ''}${e.toFixed(2)}). Last move took ${S.ai.seconds.toFixed(1)} s, ${S.ai.rollouts.toLocaleString()} rollouts.`;
+  }else{
+    fill.style.width = '0';
+    text.textContent = 'Shown after Tard moves.';
+  }
+
+  const parts = [];
+  for (let i = 0; i < S.moves.length; i += 2){
+    const fmt = (a) => (a === undefined ? '' : `${Math.floor(a / N)},${a % N}`);
+    parts.push(`<div><span class="n">${i / 2 + 1}.</span>B ${fmt(S.moves[i]).padEnd(5)} ${S.moves[i + 1] !== undefined ? 'W ' + fmt(S.moves[i + 1]) : ''}</div>`);
+  }
+  const box = $('moves');
+  box.innerHTML = parts.join('') || '<span>No moves yet.</span>';
+  box.scrollTop = box.scrollHeight;
+
+  $('as-black').classList.toggle('on', S.human === 'Black');
+  $('as-white').classList.toggle('on', S.human === 'White');
+  $('as-black').disabled = $('as-white').disabled = S.busy;
+  $('undo').disabled = !canUndo();
+  $('strength').disabled = S.busy;
+}
+
+function render(){
+  renderBoard();
+  renderPanel();
+}
+
+// ---------- events ----------
+
+$('board').addEventListener('click', (e) => {
+  const t = e.target.closest('.hit');
+  if (t) playAt(Number(t.dataset.r), Number(t.dataset.c));
+});
+$('board').addEventListener('pointerover', (e) => {
+  const t = e.target.closest('.hit');
+  const next = t ? [Number(t.dataset.r), Number(t.dataset.c)] : null;
+  if (String(next) !== String(S.hover)){ S.hover = next; renderBoard(); }
+});
+$('board').addEventListener('pointerleave', () => { S.hover = null; renderBoard(); });
+$('as-black').addEventListener('click', () => newGame('Black'));
+$('as-white').addEventListener('click', () => newGame('White'));
+$('undo').addEventListener('click', undo);
+$('show-search').addEventListener('change', (e) => { S.showSearch = e.target.checked; renderBoard(); });
+
+(async function start(){
+  render();
+  try{
+    S.info = await api('/api/info');
+  }catch(e){
+    S.error = `Can't reach the server: ${e.message}`;
+    render();
+    return;
+  }
+  const choices = [...new Set([200, 800, S.info.rollouts, 10000])]
+    .filter((n) => n <= S.info.max_rollouts).sort((a, b) => a - b);
+  $('strength').innerHTML = choices.map((n) =>
+    `<option value="${n}"${n === S.info.rollouts ? ' selected' : ''}>${n.toLocaleString()} rollouts${n === S.info.rollouts ? ' (default)' : ''}</option>`).join('');
+  $('footer').textContent = `Model: ${S.info.model} · ${S.info.network}`;
+  newGame('Black');
+})();
+</script>
+</body>
+</html>

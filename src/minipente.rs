@@ -170,6 +170,16 @@ impl MiniPenteState{
         return self.is_black_;
     }
 
+    // The stone at (row, col). Panics if that's off the board.
+    pub fn piece(&self, row: usize, col: usize) -> Piece{
+        return self.board_[row][col];
+    }
+
+    // Pairs captured so far: (by Black, by White).
+    pub fn captures(&self) -> (u8, u8){
+        return (self.b_caps_, self.w_caps_);
+    }
+
     // If current player played at row,col, would it be connect-5
     fn is_con5(&self, row: usize, col: usize) -> bool{
         let active = self.get_active_piece();

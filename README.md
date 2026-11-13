@@ -7,6 +7,7 @@ cargo run --release --bin tard -- --game pente --mode batched   # self-play trai
 cargo run --release --bin inference -- --model model.bpk   # play against a trained model
 cargo run --release --bin arena -- --model-a a.bpk --model-b b.bpk   # match two models (--games, --rollouts[-a|-b], --temp-moves, --threads, --show, --watch [--delay-ms])
 cargo run --release --bin interactive -- --game pente     # human-vs-human (--game minipente|pente|hive)
+cargo run --release --bin web -- --model model.bpk          # play MiniPente against a model in your browser (http://127.0.0.1:8080)
 ```
 
 Set `RUST_BACKTRACE=1` to get backtraces on panics.
