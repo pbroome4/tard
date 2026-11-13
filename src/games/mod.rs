@@ -16,6 +16,7 @@ use crate::model::NetConfig;
 pub mod minipente;
 pub mod pente;
 pub mod hive;
+pub mod uttt;
 
 pub type Action = usize;
 
@@ -93,6 +94,9 @@ pub enum Game{
     Pente,
     /// Hive, base game (no expansion pieces)
     Hive,
+    /// Ultimate tic-tac-toe: nine small boards; where you play picks your opponent's board
+    #[value(name = "uttt")]
+    Uttt,
 }
 
 /// Runs `$body` with `$G` naming the state type of `$game` (a `Game`), so
@@ -105,12 +109,13 @@ macro_rules! with_game{
             $crate::games::Game::MiniPente => { type $G = $crate::games::minipente::MiniPenteState; $body }
             $crate::games::Game::Pente => { type $G = $crate::games::pente::PenteState; $body }
             $crate::games::Game::Hive => { type $G = $crate::games::hive::HiveState; $body }
+            $crate::games::Game::Uttt => { type $G = $crate::games::uttt::UtttState; $body }
         }
     };
 }
 
 impl Game{
-    pub const ALL: [Game; 3] = [Game::MiniPente, Game::Pente, Game::Hive];
+    pub const ALL: [Game; 4] = [Game::MiniPente, Game::Pente, Game::Hive, Game::Uttt];
 
     /// The game's `GameState::NAME`.
     pub fn name(self) -> &'static str{
@@ -128,6 +133,7 @@ impl Game{
             Game::MiniPente => minipente::default_net_config(),
             Game::Pente => pente::default_net_config(),
             Game::Hive => hive::default_net_config(),
+            Game::Uttt => uttt::default_net_config(),
         };
     }
 }
@@ -150,7 +156,7 @@ mod tests{
 
     #[test]
     fn game_names_match_their_states_and_round_trip(){
-        assert_eq!(Game::ALL.map(Game::name), ["minipente", "pente", "hive"]);
+        assert_eq!(Game::ALL.map(Game::name), ["minipente", "pente", "hive", "uttt"]);
         for g in Game::ALL{
             assert_eq!(Game::from_name(g.name()), Some(g));
             assert_eq!(g.to_possible_value().unwrap().get_name(), g.name(), "--game value");

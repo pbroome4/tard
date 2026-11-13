@@ -183,6 +183,7 @@ fn about(game: Game) -> (&'static str, &'static str){
         Game::MiniPente => ("MiniPente", "Pente on a 9×9 board. Five in a row or five captured pairs wins."),
         Game::Pente => ("Pente", "Official Pente: 19×19, White first, tournament opening rule."),
         Game::Hive => ("Hive", "Place and move bugs, no board. Surround the enemy queen to win."),
+        Game::Uttt => ("Ultimate Tic-Tac-Toe", "Nine small boards. Where you play picks the board your opponent must play in."),
     };
 }
 
@@ -468,6 +469,21 @@ mod tests{
         assert_eq!(v.history, ["wA1"]);
         assert_eq!(v.position["cells"][0]["stack"], serde_json::json!(["wA1"]));
         assert_eq!(v.to_move, "Black");
+    }
+
+    #[test]
+    fn uttt_view_shows_the_forced_board(){
+        use tard::games::uttt::{coord_2_action as at, UtttState};
+        let moves = vec![at(1, 1)];
+        let (g, history, last) = replay::<UtttState>(&moves).unwrap();
+        let v = view(&g, moves, history, last, None);
+        assert_eq!(v.position["kind"], "uttt");
+        assert_eq!(v.position["board"][1], ".X.......");
+        assert_eq!(v.position["next"], 4, "the middle cell sends O to the center board");
+        assert_eq!(v.position["boards"][0], ".");
+        assert_eq!(v.legal.len(), 9);
+        assert!(v.legal.iter().all(|l| (3..6).contains(&l.at["row"].as_u64().unwrap())));
+        assert_eq!(v.to_move, "O");
     }
 
     #[test]

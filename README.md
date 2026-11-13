@@ -1,13 +1,13 @@
-AlphaZero-style AI for board games. Currently implemented: Pente (official rules: 19x19, tournament opening rule), MiniPente (Pente on a 9x9 board) and Hive (base game).
+AlphaZero-style AI for board games. Currently implemented: Pente (official rules: 19x19, tournament opening rule), MiniPente (Pente on a 9x9 board), Hive (base game) and Ultimate Tic-Tac-Toe.
 
 ## Usage
 
 Everything is one command, `tard`, with subcommands (add `--help` to any of them for its options):
 
 ```bash
-cargo run --release -- train --game pente           # train by self-play (--game minipente|pente|hive)
+cargo run --release -- train --game pente           # train by self-play (--game minipente|pente|hive|uttt)
 cargo run --release -- play --model model.bpk       # play a trained model in the terminal
-cargo run --release -- play --game hive             # human vs human in the terminal (--game minipente|pente|hive)
+cargo run --release -- play --game hive             # human vs human in the terminal (--game minipente|pente|hive|uttt)
 cargo run --release -- web                          # browser game room (http://127.0.0.1:8080): pick a game, then play a model, a friend, or watch two models
 cargo run --release -- arena --model-a a.bpk --model-b b.bpk   # match two models (--games, --rollouts[-a|-b], --temp-moves, --threads, --show, --watch [--delay-ms])
 ```

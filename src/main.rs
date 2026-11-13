@@ -5,7 +5,7 @@ use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 mod commands;
 
 #[derive(Parser)]
-#[command(name = "tard", about = "AlphaZero-style self-play AI for board games (MiniPente, Pente, Hive)")]
+#[command(name = "tard", about = "AlphaZero-style self-play AI for board games (MiniPente, Pente, Hive, Ultimate Tic-Tac-Toe)")]
 struct Cli{
     #[command(subcommand)]
     command: Command,

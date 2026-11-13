@@ -27,6 +27,11 @@
     --dest: #2d6a4f;
     --last: #d48a1f;
     --heat: #1f6feb;
+    --x: #c0392b;
+    --o: #1f5fa8;
+    --paper: #fbf7ef;
+    --ut-board: #f1eadc;
+    --ut-line: #b9ad97;
     --shadow: 0 1px 2px rgba(40, 30, 10, .06), 0 8px 24px rgba(40, 30, 10, .08);
     color-scheme: light;
   }
@@ -35,7 +40,8 @@
       --bg: #141311; --panel: #1e1c19; --text: #ece7de; --muted: #a29b8f; --border: #35312b;
       --accent: #74c69d; --accent-soft: #23352b; --on-accent: #10231a; --danger: #f08b7d;
       --board: #c99a50; --board-edge: #9c7232; --line: #4a3418;
-      --felt: #26231f; --felt-edge: #3a352e; --dest: #74c69d; --last: #f0a840; --heat: #58a6ff;
+      --felt: #3a362f; --felt-edge: #4a443b; --tile-b-edge: #7a7064; --dest: #74c69d; --last: #f0a840; --heat: #58a6ff;
+      --x: #f08b7d; --o: #7fb6f2; --paper: #24211d; --ut-board: #2f2b26; --ut-line: #574f45;
       --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
       color-scheme: dark;
     }
@@ -44,7 +50,8 @@
     --bg: #141311; --panel: #1e1c19; --text: #ece7de; --muted: #a29b8f; --border: #35312b;
     --accent: #74c69d; --accent-soft: #23352b; --on-accent: #10231a; --danger: #f08b7d;
     --board: #c99a50; --board-edge: #9c7232; --line: #4a3418;
-    --felt: #26231f; --felt-edge: #3a352e; --dest: #74c69d; --last: #f0a840; --heat: #58a6ff;
+    --felt: #3a362f; --felt-edge: #4a443b; --tile-b-edge: #7a7064; --dest: #74c69d; --last: #f0a840; --heat: #58a6ff;
+      --x: #f08b7d; --o: #7fb6f2; --paper: #24211d; --ut-board: #2f2b26; --ut-line: #574f45;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
     color-scheme: dark;
   }
@@ -92,6 +99,7 @@
   .board-card{ border-radius: 12px; box-shadow: var(--shadow); padding: 10px; width: 100%; max-width: 640px; margin: 0 auto; }
   .board-card.grid{ background: var(--board); border: 1px solid var(--board-edge); }
   .board-card.hive{ background: var(--felt); border: 1px solid var(--felt-edge); }
+  .board-card.uttt{ background: var(--paper); border: 1px solid var(--border); }
   svg#board{ display: block; width: 100%; height: auto; user-select: none; touch-action: manipulation; }
   .board-card.hive svg#board{ aspect-ratio: 4 / 3; }
   svg#board .hit, svg#board [data-q], svg#board [data-action]{ cursor: pointer; }
@@ -103,6 +111,8 @@
   .dot{ width: 14px; height: 14px; border-radius: 50%; flex: none; border: 1px solid rgba(128,128,128,.6); display: inline-block; }
   .dot.Black{ background: radial-gradient(circle at 35% 30%, #555, #111 60%); }
   .dot.White{ background: radial-gradient(circle at 35% 30%, #fff, #d6d3cc 70%); }
+  .dot.X{ background: var(--x); border-color: var(--x); border-radius: 3px; }
+  .dot.O{ background: transparent; border: 3px solid var(--o); }
   .spinner{ width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
   @keyframes spin{ to{ transform: rotate(360deg); } }
   .cap-row{ display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; }
@@ -135,7 +145,7 @@
 <div class="wrap">
   <header>
     <h1>Tard game room</h1>
-    <span class="sub" id="header-sub">Play MiniPente, Pente or Hive against your models, a friend, or watch two models play.</span>
+    <span class="sub" id="header-sub">Play MiniPente, Pente, Hive or Ultimate Tic-Tac-Toe against your models, a friend, or watch two models play.</span>
   </header>
 
   <!-- Setup screen -->
@@ -383,8 +393,8 @@ function renderSetup(){
 function render(){
   if ($('play').hidden || !S.cfg) return;
   const kind = S.view?.position.kind;
-  $('board-card').className = `board-card ${kind === 'hive' ? 'hive' : 'grid'}`;
-  if (kind === 'hive') renderHive(); else renderGrid();
+  $('board-card').className = `board-card ${kind === 'hive' || kind === 'uttt' ? kind : 'grid'}`;
+  if (kind === 'hive') renderHive(); else if (kind === 'uttt') renderUttt(); else renderGrid();
   renderPanel();
 }
 
@@ -463,6 +473,82 @@ function renderGrid(){
     ${hits}`;
 }
 
+// Ultimate tic-tac-toe: nine 3x3 boards with gaps between them. Cell
+// (row, col) is drawn at (utPos(col), utPos(row)).
+const UT_GAP = 0.32;
+const utPos = (i) => i + UT_GAP * Math.floor(i / 3);
+
+function markSvg(mark, x, y, size, width, extra = ''){
+  if (mark === 'X'){
+    return `<path d="M${x - size} ${y - size}L${x + size} ${y + size}M${x + size} ${y - size}L${x - size} ${y + size}" stroke="var(--x)" stroke-width="${width}" stroke-linecap="round" fill="none" ${extra}/>`;
+  }
+  return `<circle cx="${x}" cy="${y}" r="${size * 1.1}" stroke="var(--o)" stroke-width="${width}" fill="none" ${extra}/>`;
+}
+
+function renderUttt(){
+  const svg = $('board');
+  const v = S.view, P = v.position;
+  const W = 9 + 2 * UT_GAP;
+  svg.setAttribute('viewBox', `-0.7 -0.7 ${W + 0.95} ${W + 0.95}`);
+  svg.classList.toggle('locked', !humanCanMove());
+  const legalAt = new Set(v.legal.map((l) => l.row * 9 + l.col));
+  const liveBoards = new Set(v.legal.map((l) => Math.floor(l.row / 3) * 3 + Math.floor(l.col / 3)));
+
+  let boards = '', lines = '', overlays = '', marks = '', labels = '';
+  for (let i = 0; i < 9; i++){
+    labels += `<text x="${utPos(i) + .5}" y="-.36">${i}</text><text x="-.38" y="${utPos(i) + .5}">${i}</text>`;
+  }
+  for (let b = 0; b < 9; b++){
+    const x0 = utPos((b % 3) * 3), y0 = utPos(Math.floor(b / 3) * 3);
+    const live = !v.over && liveBoards.has(b);
+    boards += `<rect x="${x0 - .08}" y="${y0 - .08}" width="3.16" height="3.16" rx=".18" fill="${live ? 'var(--accent-soft)' : 'var(--ut-board)'}"${live ? ' stroke="var(--accent)" stroke-width=".05"' : ''}/>`;
+    for (const k of [1, 2]){
+      lines += `<line x1="${x0 + k}" y1="${y0 + .14}" x2="${x0 + k}" y2="${y0 + 2.86}"/><line x1="${x0 + .14}" y1="${y0 + k}" x2="${x0 + 2.86}" y2="${y0 + k}"/>`;
+    }
+    const state = P.boards[b];
+    if (state !== '.'){
+      overlays += `<rect x="${x0 - .08}" y="${y0 - .08}" width="3.16" height="3.16" rx=".18" fill="var(--paper)" opacity=".6"/>`;
+      overlays += state === 'T'
+        ? `<text x="${x0 + 1.5}" y="${y0 + 1.5}" font-size=".6" font-weight="700" fill="var(--muted)">tie</text>`
+        : markSvg(state, x0 + 1.5, y0 + 1.5, 1.05, .28, 'opacity=".9"');
+    }
+  }
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++){
+    const m = P.board[r][c];
+    if (m !== '.') marks += markSvg(m, utPos(c) + .5, utPos(r) + .5, .27, .11);
+  }
+  let last = '';
+  if (v.last) last = `<rect x="${utPos(v.last.col) + .06}" y="${utPos(v.last.row) + .06}" width=".88" height=".88" rx=".12" fill="var(--last)" opacity=".28"/>`;
+  let ghost = '';
+  if (S.hover && humanCanMove() && legalAt.has(S.hover[0] * 9 + S.hover[1])){
+    ghost = markSvg(v.to_move, utPos(S.hover[1]) + .5, utPos(S.hover[0]) + .5, .27, .11, 'opacity=".35"');
+  }
+  let heat = '';
+  if (S.showSearch && S.ai){
+    for (const s of S.ai.search.slice(0, 20)){
+      if (s.row === undefined || s.share < 0.01) continue;
+      const x = utPos(s.col) + .5, y = utPos(s.row) + .5;
+      heat += P.board[s.row][s.col] !== '.'
+        ? `<circle cx="${x}" cy="${y}" r=".44" fill="none" stroke="var(--heat)" stroke-width=".07"/>`
+        : `<circle cx="${x}" cy="${y}" r="${(0.14 + 0.26 * Math.sqrt(s.share)).toFixed(3)}" fill="var(--heat)" fill-opacity="${(0.2 + 0.45 * s.share).toFixed(3)}" stroke="none"/>`;
+      if (s.share >= 0.02) heat += `<text x="${x}" y="${y}">${Math.round(s.share * 100)}</text>`;
+    }
+  }
+  let hits = '';
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++){
+    hits += `<rect class="hit" data-r="${r}" data-c="${c}" x="${utPos(c)}" y="${utPos(r)}" width="1" height="1"/>`;
+  }
+  svg.innerHTML = `
+    <g text-anchor="middle" dominant-baseline="central" font-family="system-ui, sans-serif">
+      <g fill="var(--muted)" font-size=".34">${labels}</g>
+      ${boards}
+      <g stroke="var(--ut-line)" stroke-width=".04" stroke-linecap="round">${lines}</g>
+      ${last}${marks}${overlays}${ghost}
+      <g pointer-events="none" font-size=".3" font-weight="700" fill="#fff" stroke="rgba(0,0,0,.55)" stroke-width=".05" paint-order="stroke">${heat}</g>
+    </g>
+    ${hits}`;
+}
+
 // Hive: hex tiles in axial coordinates (pointy-top; row r shifted right by r/2).
 const SQRT3 = Math.sqrt(3);
 const BUG_COLORS = { Q: ['#b8860b', '#f0c24a'], S: ['#8b4a1c', '#e09a62'], B: ['#6b3fa0', '#c39bf0'], G: ['#2f7d32', '#86d38a'], A: ['#1f5fa8', '#7fb6f2'] };
@@ -472,15 +558,60 @@ const hexPoints = (cx, cy, s) => [0, 1, 2, 3, 4, 5].map((k) => {
   return `${(cx + s * Math.cos(a)).toFixed(3)},${(cy + s * Math.sin(a)).toFixed(3)}`;
 }).join(' ');
 
-// One bug tile: the piece name's color (w/b), kind letter and number.
+const BUG_NAMES = { Q: 'Queen bee', S: 'Spider', B: 'Beetle', G: 'Grasshopper', A: 'Ant' };
+
+// Legs as polylines given for the right side (+x) and mirrored to the left.
+const legs = (list) => list.map((pts) => [1, -1].map((side) =>
+  `<polyline points="${pts.map(([x, y]) => `${side * x},${y}`).join(' ')}" fill="none"/>`).join('')).join('');
+
+// Top-down insect drawings in a -1..1 box, head up. `ink` is the bug's
+// color, `bg` the tile's (for markings cut into the body).
+const BUG_ICONS = {
+  Q: (ink, bg) =>
+    `<g stroke="none" opacity=".45"><ellipse cx="-.34" cy="-.12" rx=".34" ry=".15" transform="rotate(25 -.34 -.12)"/>` +
+    `<ellipse cx=".34" cy="-.12" rx=".34" ry=".15" transform="rotate(-25 .34 -.12)"/></g>` +
+    legs([[[.12, -.2], [.3, -.02], [.34, .14]], [[.12, -.13], [.24, .1], [.22, .3]]]) +
+    `<g stroke="none"><circle cy="-.5" r=".15"/><circle cy="-.23" r=".17"/><ellipse cy=".3" rx=".24" ry=".36"/>` +
+    `<path d="M-.15 -.66 L-.15 -.82 L-.075 -.73 L0 -.87 L.075 -.73 L.15 -.82 L.15 -.66 Z"/></g>` +
+    `<path d="M-.22 .16 H.22 M-.24 .32 H.24 M-.19 .48 H.19" stroke="${bg}" stroke-width=".07" fill="none"/>`,
+  S: (ink, bg) =>
+    legs([[[.1, -.3], [.4, -.6], [.52, -.86]], [[.13, -.24], [.5, -.36], [.76, -.56]],
+          [[.13, -.16], [.52, -.04], [.74, .22]], [[.1, -.1], [.38, .24], [.48, .62]]]) +
+    `<g stroke="none"><circle cy="-.2" r=".2"/><ellipse cy=".28" rx=".27" ry=".33"/></g>` +
+    `<g stroke="none" fill="${bg}"><circle cx="-.07" cy="-.3" r=".04"/><circle cx=".07" cy="-.3" r=".04"/></g>`,
+  B: (ink, bg) =>
+    legs([[[.3, -.18], [.56, -.34], [.66, -.5]], [[.36, .08], [.64, .1], [.74, .24]], [[.3, .36], [.52, .56], [.58, .76]]]) +
+    `<path d="M-.07 -.56 L-.22 -.78 M.07 -.56 L.22 -.78" fill="none"/>` +
+    `<g stroke="none"><ellipse cy="-.46" rx=".2" ry=".14"/><ellipse cy=".14" rx=".38" ry=".5"/></g>` +
+    `<path d="M0 -.3 V.62" stroke="${bg}" stroke-width=".05" fill="none"/>`,
+  G: (ink, bg) =>
+    legs([[[.1, -.36], [.3, -.48], [.4, -.62]], [[.12, -.22], [.36, -.2], [.46, -.06]]]) +
+    `<g stroke-width=".13">${legs([[[.12, 0], [.42, .42], [.3, .86]]])}</g>` +
+    `<path d="M-.05 -.68 Q-.2 -.95 -.4 -.98 M.05 -.68 Q.2 -.95 .4 -.98" fill="none"/>` +
+    `<g stroke="none"><ellipse cy="-.56" rx=".14" ry=".15"/><ellipse cy=".08" rx=".15" ry=".52"/></g>`,
+  A: (ink, bg) =>
+    legs([[[.07, -.24], [.36, -.46], [.46, -.62]], [[.1, -.18], [.44, -.14], [.58, -.02]], [[.08, -.1], [.34, .12], [.42, .4]]]) +
+    `<path d="M-.06 -.66 Q-.16 -.86 -.3 -.88 M.06 -.66 Q.16 -.86 .3 -.88" fill="none"/>` +
+    `<g stroke="none"><circle cy="-.56" r=".16"/><ellipse cy="-.2" rx=".12" ry=".18"/><ellipse cy=".34" rx=".22" ry=".32"/></g>`,
+};
+
+function bugIcon(kind, cx, cy, scale, ink, bg){
+  return `<g transform="translate(${cx} ${cy}) scale(${scale})" fill="${ink}" stroke="${ink}" stroke-width=".08" stroke-linecap="round" stroke-linejoin="round">${BUG_ICONS[kind](ink, bg)}</g>`;
+}
+
+// One bug tile: the piece name's color (w/b), its insect and its number.
 // `outline` replaces the tile's edge (e.g. to mark the selected piece).
 function bugTile(cx, cy, name, { size = 0.94, outline = null, height = 1 } = {}){
   const white = name[0] === 'w', kind = name[1], num = name.slice(2);
   const ink = BUG_COLORS[kind][white ? 0 : 1];
+  const bg = `var(--tile-${white ? 'w' : 'b'})`;
   const [edge, edgeWidth] = outline || [`var(--tile-${white ? 'w' : 'b'}-edge)`, .06];
-  let svg = `<polygon points="${hexPoints(cx, cy, size)}" fill="var(--tile-${white ? 'w' : 'b'})" stroke="${edge}" stroke-width="${edgeWidth}"/>`;
-  svg += `<text x="${cx - (num ? .1 : 0)}" y="${cy + .04}" fill="${ink}" font-size=".78" font-weight="800">${kind}</text>`;
-  if (num) svg += `<text x="${cx + .38}" y="${cy + .28}" fill="${ink}" font-size=".34" font-weight="700">${num}</text>`;
+  let svg = `<polygon points="${hexPoints(cx, cy, size)}" fill="${bg}" stroke="${edge}" stroke-width="${edgeWidth}"/>`;
+  svg += bugIcon(kind, cx, cy - .02, .62 * size / .94, ink, bg);
+  if (num){
+    svg += `<circle cx="${cx + .47}" cy="${cy + .45}" r=".17" fill="${bg}" stroke="${ink}" stroke-width=".035"/>` +
+           `<text x="${cx + .47}" y="${cy + .46}" fill="${ink}" font-size=".24" font-weight="700">${num}</text>`;
+  }
   if (height > 1){
     svg += `<circle cx="${cx + .5}" cy="${cy - .55}" r=".24" fill="var(--accent)"/><text x="${cx + .5}" y="${cy - .53}" fill="var(--on-accent)" font-size=".3" font-weight="700">${height}</text>`;
   }
@@ -515,7 +646,7 @@ function renderHive(){
     const top = c.stack[c.stack.length - 1];
     const selectable = humanCanMove() && moves.some((l) => l.piece === top);
     const outline = top === S.sel ? ['var(--dest)', .2] : top === lastPiece ? ['var(--last)', .16] : null;
-    tiles += `<g data-q="${c.q}" data-r="${c.r}"${selectable ? '' : ' style="cursor:default"'}><title>${esc(c.stack.slice().reverse().join(' on '))}</title>${bugTile(x, y, top, { height: c.stack.length, outline })}</g>`;
+    tiles += `<g data-q="${c.q}" data-r="${c.r}"${selectable ? '' : ' style="cursor:default"'}><title>${esc(c.stack.slice().reverse().map((n) => `${n} (${BUG_NAMES[n[1]]})`).join(' on '))}</title>${bugTile(x, y, top, { height: c.stack.length, outline })}</g>`;
   }
   let targets = '';
   for (const d of dests){
@@ -539,7 +670,7 @@ function renderHands(){
       const legal = humanCanMove() && player === v.to_move ? moves.find((l) => ns.includes(l.piece)) : null;
       const piece = legal ? legal.piece : ns[0];
       const badge = ns.length > 1 ? `<text x="1.05" y="-.75" font-size=".5" font-weight="700" fill="var(--muted)">×${ns.length}</text>` : '';
-      return `<button type="button" data-piece="${esc(piece)}" class="${piece === S.sel ? 'sel' : ''}" ${legal ? '' : 'disabled'} title="${esc(ns.join(', '))}">
+      return `<button type="button" data-piece="${esc(piece)}" class="${piece === S.sel ? 'sel' : ''}" ${legal ? '' : 'disabled'} title="${esc(`${BUG_NAMES[k]}${ns.length > 1 ? ` ×${ns.length}` : ''} (${ns.join(', ')})`)}">
         <svg width="${ns.length > 1 ? 50 : 38}" height="40" viewBox="${ns.length > 1 ? '-1.05 -1.05 2.65 2.1' : '-1.05 -1.05 2.1 2.1'}" text-anchor="middle" dominant-baseline="central" font-family="system-ui, sans-serif" style="opacity:${legal || !(humanCanMove() && player === v.to_move) ? 1 : .45}">${bugTile(0, 0, ns[0].slice(0, 2), { size: .98 })}${badge}</svg></button>`;
     }).join('');
     const who = whoLabel(seat);
@@ -576,6 +707,7 @@ function renderPanel(){
     const onlyPass = v.legal.length === 1 && v.legal[0].pass;
     sub.textContent = onlyPass ? 'No legal move: you must pass.'
       : v.position.kind === 'hive' ? (S.sel ? `Pick a highlighted cell for ${S.sel}, or another piece.` : 'Pick a piece from your hand or on the board.')
+      : v.position.kind === 'uttt' ? `${cfg.mode === 'computer' ? `You are ${v.to_move}. ` : ''}Click a cell in a highlighted board.`
       : `${cfg.mode === 'computer' ? `You are ${v.to_move}. ` : ''}Click a point.`;
   }else{
     status.textContent = `${v.to_move} to move`;
@@ -593,6 +725,13 @@ function renderPanel(){
     }).join('');
   }else if (v && v.position.kind === 'hive'){
     infoHtml = `<div class="section-title">Pieces in hand</div>${renderHands()}`;
+  }else if (v && v.position.kind === 'uttt'){
+    const won = (m) => v.position.boards.filter((b) => b === m).length;
+    infoHtml = `<div class="section-title">Small boards won</div>` + v.players.map((p, seat) =>
+      `<div class="cap-row"><span class="who"><span class="dot ${p}"></span>${esc(p)} ${whoLabel(seat)}</span><span>${won(p)} of 9</span></div>`).join('');
+    if (!v.over){
+      infoHtml += `<div class="muted" style="margin-top:6px">${esc(v.to_move)} ${v.position.next === null ? 'may play in any open board' : 'must play in the highlighted board'}.</div>`;
+    }
   }
   $('game-info').innerHTML = infoHtml;
 
@@ -691,7 +830,10 @@ $('board').addEventListener('click', (e) => {
     const r = Number(point.dataset.r), c = Number(point.dataset.c);
     const l = S.view.legal.find((x) => x.row === r && x.col === c);
     if (l) play(l.action);
-    else if (S.view.position.board[r][c] === '.'){ S.note = "That point isn't a legal move right now."; render(); }
+    else if (S.view.position.board[r][c] === '.'){
+      S.note = S.view.position.kind === 'uttt' ? 'Play in a highlighted board.' : "That point isn't a legal move right now.";
+      render();
+    }
     return;
   }
   const dest = e.target.closest('[data-action]');
@@ -706,9 +848,15 @@ $('board').addEventListener('click', (e) => {
 $('board').addEventListener('pointerover', (e) => {
   const t = e.target.closest('.hit');
   const next = t ? [Number(t.dataset.r), Number(t.dataset.c)] : null;
-  if (String(next) !== String(S.hover)){ S.hover = next; if (S.view?.position.kind === 'grid') renderGrid(); }
+  if (String(next) !== String(S.hover)){
+    S.hover = next;
+    if (S.view?.position.kind === 'grid') renderGrid(); else if (S.view?.position.kind === 'uttt') renderUttt();
+  }
 });
-$('board').addEventListener('pointerleave', () => { S.hover = null; if (S.view?.position.kind === 'grid') renderGrid(); });
+$('board').addEventListener('pointerleave', () => {
+  S.hover = null;
+  if (S.view?.position.kind === 'grid') renderGrid(); else if (S.view?.position.kind === 'uttt') renderUttt();
+});
 $('game-info').addEventListener('click', (e) => {
   const b = e.target.closest('[data-piece]');
   if (!b || b.disabled) return;
