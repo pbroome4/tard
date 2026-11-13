@@ -1,0 +1,6 @@
+{
+  "game": "minipente",
+  "channels": 64,
+  "blocks": 6,
+  "value_hidden": 64
+}

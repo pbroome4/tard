@@ -46,6 +46,7 @@ src/lib.rs            the library the commands are built on:
   training/           replay.rs (TrainingElement, TrainingBuffer), loss.rs (compute_loss), run_dir.rs (OutputManager, metrics)
   util.rs             normalize, panic_message
 web/index.html        the `web` page, compiled in with include_str! (rebuild after editing it)
+models/               saved trained models, committed (weights included); see models/README.md
 ```
 
 ## Architecture
@@ -93,7 +94,8 @@ Key abstractions:
 
 - To continue a run: `train --resume output/run_<ts>/checkpoints/step_<N>`. It restores the weights and optimizer, takes N from the directory name, and fast-forwards the cosine LR schedule to step N. The replay buffer is not persisted, so a resumed run re-does the warm-up fill. Training stops at `--total-steps`.
 - Without `--resume`, training starts from a fresh network. If a `--resume` checkpoint fails to load (corrupt, or for another game), training panics rather than silently starting fresh. `play`, `web` and `arena` take model files directly (each needs its `.net.json` sidecar next to it), e.g. `--model output/run_<ts>/checkpoints/step_<N>/model.bpk`.
-- `*.bpk`, `output/`, `*.data`, and `*.svg` are gitignored. Model files and `perf.data` (several GB) live untracked in the repo root.
+- `*.bpk`, `output/`, `*.data`, and `*.svg` are gitignored, except `models/**/*.bpk`: saved models are committed. Other model files and `perf.data` (several GB) live untracked in the repo root.
+- Saved models (`models/<game>/<name>.bpk`) keep their sidecar as `<name>.net.json` plus the run's `config.json` and `metrics.csv` as `<name>.train.json` / `<name>.metrics.csv`; `models/README.md` lists them and how to add one. `web` lists them first, by name, ahead of run checkpoints.
 - Every game's `apply_action` panics (`assert!`, in release builds too) on an illegal action. Callers should pick actions from `legal_actions_mask` or check `is_legal_action` (or `TextGame::parse_action`, which only returns legal actions); the Pente games' `play(row, col)` is a non-panicking variant that returns `false` instead.
 - Pente is much heavier than MiniPente: each replay-buffer position holds 4×361 + 361 floats (~7 KB), so the default buffer (`--buffer-iters 10` × 32,768 positions) needs ~2.4 GB of RAM, and every evaluation runs the bigger network on a 19×19 board.
 - Hive is heavy on memory: each replay-buffer position holds 37×576 input floats plus a 6337-float posterior (~110 KB), so the default buffer (`--buffer-iters 10` × 32,768 positions) would need ~36 GB of RAM. Shrink it (`--buffer-iters`, or `--steps-per-iter`/`--batch-size`/`--sample-reuse`, which set the per-iteration size). Also pass `--dirichlet-alpha` (e.g. 0.3): the default, 20 / action-space size, is ~0.003 for Hive's 6337 actions, far below what its ~20-100 legal moves call for.

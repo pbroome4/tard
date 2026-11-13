@@ -60,6 +60,8 @@ struct ModelInfo {
     group: String, // e.g. "run_1794483901"
     #[serde(skip)]
     game: Game,
+    #[serde(skip)]
+    checkpoint: bool, // a run's checkpoint, rather than a model saved on its own
 }
 
 // Every model under `roots`, newest run and step first.
@@ -87,7 +89,16 @@ fn scan_models(roots: &[PathBuf]) -> Vec<ModelInfo> {
     for root in roots {
         walk(root, &mut out);
     }
-    out.sort_by(|a, b| (&b.group, &b.label_key(), &b.id).cmp(&(&a.group, &a.label_key(), &a.id)));
+    // Saved models (e.g. models/) first, then run checkpoints; newest group
+    // and step first within each.
+    out.sort_by(|a, b| {
+        return (a.checkpoint, &b.group, &b.label_key(), &b.id).cmp(&(
+            b.checkpoint,
+            &a.group,
+            &a.label_key(),
+            &a.id,
+        ));
+    });
     out.dedup_by(|a, b| a.id == b.id);
     return out;
 }
@@ -117,20 +128,29 @@ fn model_info(p: &Path) -> Option<ModelInfo> {
                 .unwrap_or_default();
             (run, format!("step {}", step))
         }
+        // Any other model file, e.g. models/minipente/minipente-200k.bpk:
+        // its name, grouped by its directory.
         None => {
-            let dir = if parent_name.is_empty() {
-                "models".to_string()
+            let dir = parent.display().to_string();
+            let dir = dir.strip_prefix("./").unwrap_or(&dir);
+            let dir = if dir.is_empty() || dir == "." {
+                "models"
             } else {
-                parent.display().to_string()
+                dir
             };
-            (dir, p.file_name()?.to_string_lossy().to_string())
+            (
+                dir.to_string(),
+                p.file_stem()?.to_string_lossy().to_string(),
+            )
         }
     };
+    let checkpoint = label.starts_with("step ");
     return Some(ModelInfo {
         id: p.display().to_string(),
         label,
         group,
         game,
+        checkpoint,
     });
 }
 
@@ -674,6 +694,7 @@ mod tests {
         assert_eq!(
             summary,
             [
+                (dir, "loose".to_string(), Game::Pente),
                 ("run_200".to_string(), "step 512".to_string(), Game::Hive),
                 (
                     "run_100".to_string(),
@@ -685,7 +706,6 @@ mod tests {
                     "step 512".to_string(),
                     Game::MiniPente
                 ),
-                (dir, "loose.bpk".to_string(), Game::Pente),
             ]
         );
         std::fs::remove_dir_all(&root).unwrap();

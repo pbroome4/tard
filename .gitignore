@@ -5,3 +5,5 @@ __pycache__
 *.svg
 /output
 *.bpk
+# Saved models (models/) are committed, weights included.
+!/models/**/*.bpk
