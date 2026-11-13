@@ -15,7 +15,7 @@
 use burn::lr_scheduler::cosine::CosineAnnealingLrSchedulerConfig;
 use burn::lr_scheduler::module_lr_scheduler::ModuleLearningRate;
 use burn::optim::{AdamWConfig, GradientsParams};
-use burn::tensor::{Device, Tensor};
+use burn::tensor::Tensor;
 use clap::ValueEnum;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -180,8 +180,7 @@ fn train_tard<G: GameState>(args: &Args, default_net: NetConfig) {
     let n_training_steps = args.total_steps;
 
     let start_time = Instant::now();
-    let device = Device::default().autodiff();
-    info!("Using Device: {:?}", device);
+    let device = tard::device::pick_device().autodiff();
     let mut opt = AdamWConfig::new()
         .with_weight_decay(args.weight_decay)
         .init();

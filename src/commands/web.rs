@@ -516,7 +516,7 @@ pub fn run(args: Args) {
     let addr = format!("{}:{}", args.host, args.port);
     let mut state = State {
         args,
-        device: Device::default(),
+        device: tard::device::pick_device(),
         models: Vec::new(),
         loaded: Vec::new(),
     };

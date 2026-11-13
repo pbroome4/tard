@@ -1,6 +1,5 @@
 //! `tard play`: play a game in the terminal, against a trained model
 //! (`--model`, whose sidecar names the game) or human vs human (`--game`).
-use burn::tensor::Device;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use tracing::info;
@@ -41,7 +40,7 @@ pub fn run(args: Args) {
 
 fn vs_computer<G: TextGame>(model: &PathBuf, rollouts: usize) {
     info!("Playing {} against {}", G::NAME, model.display());
-    let device = Device::default();
+    let device = tard::device::pick_device();
     let (tard, net) = load_model::<G>(model, &device)
         .unwrap_or_else(|e| panic!("Failed to load model {}: {}", model.display(), e));
     info!("Network: {:?}", net);

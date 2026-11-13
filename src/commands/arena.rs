@@ -181,7 +181,7 @@ pub fn run(args: Args) {
 }
 
 fn run_match<G: TextGame>(args: &Args) {
-    let device = Device::default();
+    let device = tard::device::pick_device();
     let tard_a = load::<G>(&args.model_a, &device);
     let tard_b = load::<G>(&args.model_b, &device);
     let rollouts_a = args.rollouts_a.unwrap_or(args.rollouts);
