@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use burn::module::Module;
 use tracing::{debug, info};
 
-use crate::gamestate::*;
-use crate::tard::*;
+use crate::games::*;
+use crate::model::Tard;
 use super::{Evaluator, EvalBackend, EvalStats, EvalStatsSnapshot, TardEvaluator};
 
 

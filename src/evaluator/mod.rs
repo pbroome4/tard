@@ -4,9 +4,10 @@ use std::time::{Duration, Instant};
 use burn::tensor::{Device, Tensor, TensorData};
 use burn::module::Module;
 
-use crate::gamestate::*;
-use crate::tard::*;
-use crate::utils::*;
+use crate::games::*;
+use crate::model::Tard;
+use crate::util::normalize;
+use tracing::warn;
 
 pub mod batched;
 pub mod replicated;
@@ -98,6 +99,25 @@ impl EvalStatsSnapshot{
     }
 }
 
+pub fn legalize_policy(mut p: Vec<f32>, g: &impl GameState) -> Vec<f32>{
+    let legal_mask = g.legal_actions_mask();
+    for i in 0..p.len(){
+        if !legal_mask[i]{
+            p[i] = 0.0;
+        }
+    }
+    let sum: f32 = p.iter().sum();
+    if !(sum > 0.0 && sum.is_finite()){
+        // All legal moves got zero (underflow) or non-finite (NaN/inf)
+        // probability. Fall back to uniform over legal moves rather than
+        // producing NaNs.
+        warn!("Policy has no usable mass over legal moves (sum = {}); using uniform", sum);
+        p = legal_mask.iter().map(|&legal| if legal {1.0} else {0.0}).collect();
+    }
+    return normalize(p);
+}
+
+
 ///////////////////////////////////////////////////////////////////////
 //
 //                      Local Evaluators
@@ -166,6 +186,40 @@ impl <G:GameState> Evaluator<G> for TardEvaluator{
 #[cfg(test)]
 mod tests{
     use super::*;
+    use crate::games::minipente::MiniPenteState;
+
+    #[test]
+    fn legalize_policy_masks_illegal_moves_and_renormalizes(){
+        let mut g = MiniPenteState::new();
+        g.play(0, 0);
+        let mut p = vec![0.0; 81];
+        p[0] = 0.5; // occupied
+        p[1] = 0.25;
+        p[2] = 0.25;
+        let p = legalize_policy(p, &g);
+        assert_eq!(p[0], 0.0);
+        assert!((p[1] - 0.5).abs() < 1e-6 && (p[2] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn legalize_policy_falls_back_to_uniform_without_usable_mass(){
+        let mut g = MiniPenteState::new();
+        g.play(4, 4);
+        let all_on_illegal = {
+            let mut p = vec![0.0; 81];
+            p[40] = 1.0;
+            p
+        };
+        for bad in [vec![0.0; 81], vec![f32::NAN; 81], vec![f32::INFINITY; 81], all_on_illegal]{
+            let p = legalize_policy(bad, &g);
+            assert_eq!(p[40], 0.0);
+            for (a, &x) in p.iter().enumerate(){
+                if a != 40{
+                    assert!((x - 1.0 / 80.0).abs() < 1e-6, "action {a}: {x}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn eval_stats_accumulate_across_clones_and_diff_by_window(){

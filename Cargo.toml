@@ -1,5 +1,5 @@
 [package]
-name = "tard"         # Crate name; also the training binary (src/main.rs)
+name = "tard"         # the library and the `tard` command (src/main.rs)
 version = "0.1.0"
 edition = "2021"
 

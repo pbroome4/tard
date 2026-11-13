@@ -3,22 +3,80 @@
 //                      Self-Play Sources
 //
 //////////////////////////////////////////////////////////////////////////////
-// The training loop pulls finished self-play games from a SelfPlaySource and
-// pushes updated models back into it. Implementations:
+// run_self_play plays one game of the network against itself. The training
+// loop pulls finished games from a SelfPlaySource and pushes updated models
+// back into it. Implementations:
 //   SingleThreaded         - plays games inline on the calling thread.
 //   WorkerPool<B>          - N worker threads, each with a client from an
 //                            EvalBackend (BatchedBackend, ReplicatedBackend).
 
 use std::thread::{self, JoinHandle};
 use crossbeam::channel::{Receiver, Sender};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
-use crate::engine::{run_self_play, DirichletHParams, SelfPlayElement};
 use crate::evaluator::{Evaluator, EvalBackend, EvalStatsSnapshot, TardEvaluator};
-use crate::gamestate::GameState;
-use crate::tard::Tard;
-use crate::utils::panic_message;
+use crate::games::GameState;
+use crate::mcts::{search, select_action, DirichletHParams, MctsTree, C_PUCT};
+use crate::model::Tard;
+use crate::util::panic_message;
 
+
+//////////////////////////// One game ////////////////////////////
+
+#[derive(Debug)]
+pub struct SelfPlayElement<G:GameState>{
+    pub g: G,
+    pub mcts_post: Vec<f32>,
+    pub outcome: f32
+}
+
+// Plays one game against itself. Each move searches until the root has
+// num_sims visits; the subtree under the chosen move is kept, so its visits
+// count toward the next move's num_sims.
+pub fn run_self_play <G: GameState>(
+    eval: &mut impl Evaluator<G>,
+    num_sims: usize,
+    dhp: &DirichletHParams,
+    temp_moves: usize,
+) -> Vec<SelfPlayElement<G>>{
+    debug!("Running self play");
+    let mut sp_vec = Vec::new();
+    let mut g = G::default();
+    let mut tree = MctsTree::new(C_PUCT);
+    let mut move_n = 0;
+    while !g.is_terminal(){
+        debug!("Current State: \n{}", g);
+        debug!("Computing self-play move#: {}", move_n);
+        let (mcts_post, _) = search(&mut tree, &g, eval, num_sims, dhp);
+        // Sample for the first temp_moves plies (opening variety), then play greedily.
+        let action = select_action(&mcts_post, move_n >= temp_moves);
+        let sp_element = SelfPlayElement{
+            g: g.clone(),
+            mcts_post,
+            outcome: 0.0
+        };
+        sp_vec.push(sp_element);
+        debug!("Playing action: {}", action);
+        g.apply_action(action);
+        tree = tree.reroot(action);
+        move_n += 1;
+    }
+    debug!("Current State: \n{}", g);
+    let outcome = g.get_terminal_value();
+    // sp_vec has list of all non-terminal states.
+    // outcome is relative to terminal state. So we iterate
+    // in reverse and polarity starts at -1.0
+    let mut polarity = -1.0;
+    for spe in sp_vec.iter_mut().rev(){
+        spe.outcome = polarity * outcome;
+        polarity *= -1.0;
+    }
+    trace!("{:?}", &sp_vec);
+    return sp_vec;
+}
+
+
+//////////////////////////// Sources ////////////////////////////
 
 pub trait SelfPlaySource<G: GameState>{
     // Blocks until one finished game is available. None means the source has shut down.
@@ -191,9 +249,69 @@ fn start_worker<G: GameState>(
 mod tests{
     use super::*;
     use crate::evaluator::NullEvaluator;
-    use crate::minipente::MiniPenteState;
+    use crate::games::minipente::MiniPenteState;
+    use crate::games::pente::{self, PenteState};
+    use crate::games::hive::{self, HiveState};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn noise() -> DirichletHParams{
+        return DirichletHParams{ epsilon: 0.25, alpha: 0.25 };
+    }
+
+    fn assert_distribution(p: &[f32]){
+        let sum: f32 = p.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-4, "sums to {sum}");
+        assert!(p.iter().all(|&x| (0.0..=1.0).contains(&x)));
+    }
+
+    #[test]
+    fn self_play_outcomes_alternate_from_the_winners_perspective(){
+        for _ in 0..3{
+            let game = run_self_play::<MiniPenteState>(&mut NullEvaluator{}, 16, &noise(), 4);
+            assert!(!game.is_empty());
+            assert!(!game[0].g.is_terminal());
+            let last = game.last().unwrap().outcome;
+            // The last mover either won (+1) or the game was drawn (0).
+            assert!(last == 1.0 || last == 0.0, "last outcome {last}");
+            for pair in game.windows(2){
+                assert_eq!(pair[0].outcome, -pair[1].outcome);
+            }
+            for spe in &game{
+                assert_distribution(&spe.mcts_post);
+            }
+        }
+    }
+
+    #[test]
+    fn pente_self_play_follows_the_tournament_rule(){
+        // Root noise is skipped for the forced first move (one legal child).
+        let game = run_self_play::<PenteState>(&mut NullEvaluator{}, 8, &noise(), 4);
+        assert!(game.len() >= 3);
+        assert_eq!(game[0].mcts_post[pente::coord_2_action(9, 9)], 1.0,
+                   "the first stone must go on the center");
+        for r in 7..=11{
+            for c in 7..=11{
+                assert_eq!(game[2].mcts_post[pente::coord_2_action(r, c)], 0.0,
+                           "first player's second stone inside the central 5x5 at ({r}, {c})");
+            }
+        }
+        for spe in &game{
+            assert_distribution(&spe.mcts_post);
+        }
+    }
+
+    #[test]
+    fn hive_self_play_runs_to_the_end(){
+        let game = run_self_play::<HiveState>(&mut NullEvaluator{}, 4, &noise(), 4);
+        assert!(!game.is_empty() && game.len() <= hive::MAX_PLIES);
+        for pair in game.windows(2){
+            assert_eq!(pair[0].outcome, -pair[1].outcome);
+        }
+        for spe in &game{
+            assert_distribution(&spe.mcts_post);
+        }
+    }
 
     // Uniform evaluator that panics on its first call if `panics` is set.
     struct MaybePanic{ panics: bool }

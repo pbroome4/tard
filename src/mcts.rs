@@ -5,15 +5,17 @@ use std::fmt::{self, Display};
 use std::ops::{Index, IndexMut};
 use rand_distr::multi::Dirichlet;
 
-use crate::gamestate::{GameState, Action};
+use crate::games::{GameState, Action};
 use crate::evaluator::*;
-use crate::utils::normalize;
+use crate::util::normalize;
 
 // PUCT exploration constant. Typically 1.0 to 2.5.
-const C_PUCT: f32 = 1.0;
+pub(crate) const C_PUCT: f32 = 1.0;
 
 
-pub fn inference <G: GameState>(
+/// Searches from `g` and returns the most-visited move and the position's
+/// value for the side to move. No root noise.
+pub fn best_move <G: GameState>(
     g: &G,
     eval: &mut impl Evaluator<G>,
     num_rollouts: usize) -> (Action, f32)
@@ -26,50 +28,6 @@ pub fn inference <G: GameState>(
 }
 
 
-// Plays one game against itself. Each move searches until the root has
-// num_sims visits; the subtree under the chosen move is kept, so its visits
-// count toward the next move's num_sims.
-pub fn run_self_play <G: GameState>(
-    eval: &mut impl Evaluator<G>,
-    num_sims: usize,
-    dhp: &DirichletHParams,
-    temp_moves: usize,
-) -> Vec<SelfPlayElement<G>>{
-    debug!("Running self play");
-    let mut sp_vec = Vec::new();
-    let mut g = G::default();
-    let mut tree = MctsTree::new(C_PUCT);
-    let mut move_n = 0;
-    while !g.is_terminal(){
-        debug!("Current State: \n{}", g);
-        debug!("Computing self-play move#: {}", move_n);
-        let (mcts_post, _) = search(&mut tree, &g, eval, num_sims, dhp);
-        // Sample for the first temp_moves plies (opening variety), then play greedily.
-        let action = select_action(&mcts_post, move_n >= temp_moves);
-        let sp_element = SelfPlayElement{
-            g: g.clone(),
-            mcts_post,
-            outcome: 0.0
-        };
-        sp_vec.push(sp_element);
-        debug!("Playing action: {}", action);
-        g.apply_action(action);
-        tree = tree.reroot(action);
-        move_n += 1;
-    }
-    debug!("Current State: \n{}", g);
-    let outcome = g.get_terminal_value();
-    // sp_vec has list of all non-terminal states.
-    // outcome is relative to terminal state. So we iterate
-    // in reverse and polarity starts at -1.0
-    let mut polarity = -1.0;
-    for spe in sp_vec.iter_mut().rev(){
-        spe.outcome = polarity * outcome;
-        polarity *= -1.0;
-    }
-    trace!("{:?}", &sp_vec);
-    return sp_vec;
-}
 
 // Pick an action from a probability distribution over actions.
 // greedy=true takes the most likely action (temperature -> 0),
@@ -89,12 +47,6 @@ pub fn select_action(post_prob: &[f32], greedy: bool) -> Action{
                          .sample(&mut rand::rng());
 }
 
-#[derive(Debug)]
-pub struct SelfPlayElement<G:GameState>{
-    pub g: G,
-    pub mcts_post: Vec<f32>,
-    pub outcome: f32
-}
 
 
 // Run MCTS from the current state with a fresh tree. State must be
@@ -117,7 +69,7 @@ pub fn mcts <G: GameState> (
 // reused subtree) count toward num_sims; an unexpanded root always gets at
 // least the one simulation that expands it. Dirichlet noise is mixed into the
 // root's priors before searching. Returns (posterior, value) as for mcts().
-fn search <G: GameState> (
+pub(crate) fn search <G: GameState> (
     tree: &mut MctsTree,
     state: &G,
     eval: &mut impl Evaluator<G>,
@@ -458,9 +410,7 @@ impl Display for DirichletHParams{
 #[cfg(test)]
 mod tests{
     use super::*;
-    use crate::minipente::{self, MiniPenteState};
-    use crate::pente::{self, PenteState};
-    use crate::hive::HiveState;
+    use crate::games::minipente::{self, MiniPenteState};
 
     // Uniform-policy, zero-value evaluator that counts its calls.
     struct Counting{ n: usize }
@@ -629,53 +579,8 @@ mod tests{
         assert_ne!(after, before);
     }
 
-    #[test]
-    fn self_play_outcomes_alternate_from_the_winners_perspective(){
-        for _ in 0..3{
-            let game = run_self_play::<MiniPenteState>(&mut NullEvaluator{}, 16, &noise(), 4);
-            assert!(!game.is_empty());
-            assert!(!game[0].g.is_terminal());
-            let last = game.last().unwrap().outcome;
-            // The last mover either won (+1) or the game was drawn (0).
-            assert!(last == 1.0 || last == 0.0, "last outcome {last}");
-            for pair in game.windows(2){
-                assert_eq!(pair[0].outcome, -pair[1].outcome);
-            }
-            for spe in &game{
-                assert_distribution(&spe.mcts_post);
-            }
-        }
-    }
 
-    #[test]
-    fn pente_self_play_follows_the_tournament_rule(){
-        // Root noise is skipped for the forced first move (one legal child).
-        let game = run_self_play::<PenteState>(&mut NullEvaluator{}, 8, &noise(), 4);
-        assert!(game.len() >= 3);
-        assert_eq!(game[0].mcts_post[pente::coord_2_action(9, 9)], 1.0,
-                   "the first stone must go on the center");
-        for r in 7..=11{
-            for c in 7..=11{
-                assert_eq!(game[2].mcts_post[pente::coord_2_action(r, c)], 0.0,
-                           "first player's second stone inside the central 5x5 at ({r}, {c})");
-            }
-        }
-        for spe in &game{
-            assert_distribution(&spe.mcts_post);
-        }
-    }
 
-    #[test]
-    fn hive_self_play_runs_to_the_end(){
-        let game = run_self_play::<HiveState>(&mut NullEvaluator{}, 4, &noise(), 4);
-        assert!(!game.is_empty() && game.len() <= crate::hive::MAX_PLIES);
-        for pair in game.windows(2){
-            assert_eq!(pair[0].outcome, -pair[1].outcome);
-        }
-        for spe in &game{
-            assert_distribution(&spe.mcts_post);
-        }
-    }
 
     #[test]
     fn select_action_greedy_takes_argmax_and_sampling_avoids_zero_mass(){

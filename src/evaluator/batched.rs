@@ -15,9 +15,10 @@ use burn::module::Module;
 use crossbeam::channel::{Receiver, RecvError, Sender, TryRecvError};
 use tracing::{trace, debug, info, warn};
 
-use crate::gamestate::*;
-use crate::tard::*;
-use crate::utils::*;
+use crate::games::*;
+use crate::model::Tard;
+use crate::util::panic_message;
+use super::legalize_policy;
 use std::time::Instant;
 use super::{Evaluator, EvalBackend, EvalStats, EvalStatsSnapshot};
 

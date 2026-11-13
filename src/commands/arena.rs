@@ -1,26 +1,22 @@
-// Plays two trained models against each other and reports the match result.
-// The game comes from the models' .net.json sidecars.
+//! `tard arena`: plays two trained models against each other and reports
+//! the match result. The game comes from the models' .net.json sidecars.
 use burn::tensor::Device;
-use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tracing::info;
-use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 
-use tard::engine::{mcts, select_action, DirichletHParams};
 use tard::evaluator::TardEvaluator;
-use tard::gamestate::{GameState, TextGame};
-use tard::minipente::MiniPenteState;
-use tard::pente::PenteState;
-use tard::hive::HiveState;
-use tard::tard::Tard;
-use tard::utils::{load_model, read_model_meta};
+use tard::games::TextGame;
+use tard::mcts::{mcts, select_action, DirichletHParams};
+use tard::model::{load_model, Tard};
+use tard::with_game;
 
-#[derive(Parser, Debug)]
-#[command(about = "Play two trained Tard models against each other")]
-struct Args{
+use super::game_of_model;
+
+#[derive(clap::Args, Debug)]
+pub struct Args{
     /// First model file (its <name>.net.json sidecar must sit next to it)
     #[arg(long)]
     model_a: PathBuf,
@@ -152,29 +148,14 @@ fn elo_diff(s: f64) -> f64{
     return -400.0 * (1.0 / s - 1.0).log10() + 0.0; // + 0.0 turns -0 into 0
 }
 
-fn main(){
-    let args = Args::parse();
-    let filter = EnvFilter::from_default_env()
-        .add_directive(LevelFilter::WARN.into())
-        .add_directive("tard=info".parse().unwrap())
-        .add_directive("arena=info".parse().unwrap());
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+pub fn run(args: Args){
     assert!(args.games > 0, "--games must be at least 1");
     assert!(args.threads > 0, "--threads must be at least 1");
-
     // Model B is checked against the same game when it loads.
-    let meta = read_model_meta(&args.model_a).unwrap_or_else(|e|{
-        panic!("Failed to read model {}: {}", args.model_a.display(), e)
-    });
-    match meta.game.as_str(){
-        MiniPenteState::NAME => run::<MiniPenteState>(&args),
-        PenteState::NAME => run::<PenteState>(&args),
-        HiveState::NAME => run::<HiveState>(&args),
-        other => panic!("Model {} is for game '{}', which the arena can't play", args.model_a.display(), other),
-    }
+    with_game!(game_of_model(&args.model_a), G => run_match::<G>(&args));
 }
 
-fn run<G: TextGame>(args: &Args){
+fn run_match<G: TextGame>(args: &Args){
     let device = Device::default();
     let tard_a = load::<G>(&args.model_a, &device);
     let tard_b = load::<G>(&args.model_b, &device);

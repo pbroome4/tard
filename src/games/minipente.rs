@@ -4,9 +4,9 @@
 use std::{fmt};
 use tracing::trace;
 
-use crate::gamestate::{Action, GameState, TextGame};
-use crate::utils::parse_coord;
-use crate::tard::NetConfig;
+use crate::games::{Action, GameState, TextGame};
+use crate::games::parse_coord;
+use crate::model::NetConfig;
 
 pub const ROWS: usize = 9;
 pub const COLS: usize = 9;

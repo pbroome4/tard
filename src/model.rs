@@ -1,16 +1,20 @@
+//! The network (`Tard`: a conv trunk of residual blocks with policy and
+//! value heads), its size (`NetConfig`), and saving and loading model files
+//! with their `.net.json` sidecar.
+
 use burn::prelude::*;
 use burn::nn::conv::{Conv2d, Conv2dConfig};
 use burn::nn::{BatchNorm, BatchNormConfig, Linear, LinearConfig};
 use burn::tensor::Device;
 use burn::tensor::activation::{leaky_relu, relu, tanh, log_softmax};
-use tracing::{debug, info};
-use core::fmt;
-use bounded_vec_deque::BoundedVecDeque;
-use rand::RngExt;
-
+use burn::store::ModuleRecord;
 use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs;
+use std::path::{Path, PathBuf};
+use tracing::info;
 
-use crate::gamestate::GameState;
+use crate::games::GameState;
 
 /// Size of the network's trunk and value head. The input and output layers
 /// are sized from the GameState instead. A checkpoint only loads into a
@@ -174,168 +178,117 @@ impl ResNet{
     }
 }
 
-////// Training structures and Batch Utilities ////
-#[derive(Clone, Debug)]
-pub struct TrainingElement{
-    pub state: Vec<f32>,          // flattened N_CHAN x ROWS x COLS (GameState::to_tensor)
-    pub mcts_posterior: Vec<f32>, // MCTS visit distribution, length ACTN_SPC_SIZE
-    pub outcome: f32,             // game result from the side-to-move's perspective
+
+////// Model files //////
+
+/// What a model file's weights are shaped for, saved next to it as
+/// `<name>.net.json`: the game (input/output layers) and the NetConfig
+/// (trunk and value head). Serialized flat, e.g.
+/// `{"game": "minipente", "channels": 128, "blocks": 10, "value_hidden": 128}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelMeta{
+    pub game: String, // GameState::NAME
+    #[serde(flatten)]
+    pub net: NetConfig,
 }
 
-pub struct TrainingBatch{
-    pub state: Tensor<4>,
-    pub mcts_posterior:Tensor<2>,
-    pub outcome: Tensor<2>
+/// Path of the sidecar for a model file: `.../model.bpk` -> `.../model.net.json`.
+pub fn model_meta_path(model: &Path) -> PathBuf{
+    return model.with_extension("net.json");
 }
 
-impl TrainingBatch{
-    // Packs the elements into one flat buffer per field, so each field is a
-    // single host-to-device copy.
-    pub fn from_training_elements<G: GameState>(v: &[&TrainingElement], device: &Device) -> TrainingBatch{
-        let n = v.len();
-        let mut states = Vec::with_capacity(n * G::N_CHAN * G::ROWS * G::COLS);
-        let mut mcts_posteriors = Vec::with_capacity(n * G::ACTN_SPC_SIZE);
-        let mut outcomes = Vec::with_capacity(n);
-        for te in v{
-            states.extend_from_slice(&te.state);
-            mcts_posteriors.extend_from_slice(&te.mcts_posterior);
-            outcomes.push(te.outcome);
-        }
-        return Self{
-            state: Tensor::<4>::from_data(
-                TensorData::new(states, [n, G::N_CHAN, G::ROWS, G::COLS]), device),
-            mcts_posterior: Tensor::<2>::from_data(
-                TensorData::new(mcts_posteriors, [n, G::ACTN_SPC_SIZE]), device),
-            outcome: Tensor::<2>::from_data(
-                TensorData::new(outcomes, [n, 1]), device),
-        };
+/// Writes `meta` as the sidecar for `model`.
+pub fn write_model_meta(model: &Path, meta: &ModelMeta) -> Result<(), Box<dyn Error>>{
+    fs::write(model_meta_path(model), serde_json::to_string_pretty(meta)?)?;
+    return Ok(());
+}
+
+/// Reads the sidecar saved next to `model`. It is required: without it
+/// there's no way to know the network's shape.
+pub fn read_model_meta(model: &Path) -> Result<ModelMeta, Box<dyn Error>>{
+    let p = model_meta_path(model);
+    let json = fs::read_to_string(&p)
+        .map_err(|e| format!("can't read model sidecar {}: {}", p.display(), e))?;
+    return Ok(serde_json::from_str(&json)?);
+}
+
+/// Errors if `meta` records a game other than G.
+pub fn check_game<G: GameState>(meta: &ModelMeta) -> Result<(), Box<dyn Error>>{
+    if meta.game != G::NAME{
+        return Err(format!("model was trained for game '{}', not '{}'", meta.game, G::NAME).into());
     }
+    return Ok(());
 }
 
-impl fmt::Display for TrainingBatch{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.outcome)?;
-        return Ok(());
-    }
+/// Saves the weights to `path` and their game and network size next to them.
+pub fn save_model<G: GameState>(tard: &Tard, net: &NetConfig, path: &Path) -> Result<(), Box<dyn Error>>{
+    tard.clone().save_file(path)?;
+    write_model_meta(path, &ModelMeta{ game: G::NAME.to_string(), net: *net })?;
+    return Ok(());
 }
 
-
-#[derive(Debug)]
-pub struct TardLoss{
-    pub loss: Tensor<1>,
-    pub cross_entropy_loss: Tensor<1>,
-    pub mse_loss: Tensor<1>
+/// Loads a model saved by save_model into a network for game G.
+/// Returns the network and its size.
+pub fn load_model<G: GameState>(p: &Path, device: &Device) -> Result<(Tard, NetConfig), Box<dyn Error>>{
+    let meta = read_model_meta(p)?;
+    check_game::<G>(&meta)?;
+    info!("Loading model record: {} ({:?})", p.display(), meta);
+    let record = ModuleRecord::load(p)?;
+    let tard = Tard::for_game::<G>(&meta.net, device).load_record(record);
+    info!("Tard model loaded");
+    return Ok((tard, meta.net));
 }
-
-impl std::fmt::Display for TardLoss{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Loss: {}", self.loss.to_data())?;
-        writeln!(f, "\tcross_entropy_loss: {}", self.cross_entropy_loss.to_data())?;
-        writeln!(f, "\tmse_loss: {}", self.mse_loss.to_data())?;
-        return Ok(());
-    }
-}
-
-pub fn compute_loss<G: GameState>(t: &Tard, v: &[&TrainingElement]) -> TardLoss{
-    let device = t.devices().first().unwrap().clone();
-    let batch = TrainingBatch::from_training_elements::<G>(v, &device);
-    let (tard_policy_batch, tard_value_batch) = t.forward(batch.state);
-    
-    // policy network loss: cross-entropy of the policy's log-probs against
-    // the MCTS posterior probabilities
-    debug!("mcts_posterior: {}", batch.mcts_posterior);
-    debug!("tard_policy_log_probs: {}", tard_policy_batch);
-    debug_assert!(batch.mcts_posterior.shape() == tard_policy_batch.shape());
-    let cross_entropy_terms = batch.mcts_posterior * tard_policy_batch;
-    let cross_entropy_loss = cross_entropy_terms.sum_dim(1)
-                                                .mean()
-                                                .neg();
-
-    // value network loss
-    debug!("batch_outcome: {}", batch.outcome);
-    debug!("tard_value_batch: {}", tard_value_batch);
-    debug_assert!(tard_value_batch.shape() == batch.outcome.shape());
-    let mse_loss = (tard_value_batch - batch.outcome).powf_scalar(2.0)
-                                                     .mean();
-    
-    let loss = cross_entropy_loss.clone() + mse_loss.clone();
-    return TardLoss{loss, cross_entropy_loss, mse_loss};
-}
-
-
-pub struct TrainingBuffer{
-    memory_: BoundedVecDeque<TrainingElement>,
-}
-
-impl TrainingBuffer{
-    pub fn new(cap: usize) -> Self {
-        return Self{
-            memory_: BoundedVecDeque::with_capacity(cap, cap),
-        };
-    }
-
-    // Samples `size` elements uniformly with replacement.
-    // Returns an empty Vec if the buffer is empty.
-    pub fn sample(&self, size: usize) -> Vec<&TrainingElement> {
-        let mut v = Vec::with_capacity(size);
-        let l = self.memory_.len();
-        if l > 0{
-            let mut rng = rand::rng();
-            for _ in 0..size {
-                v.push(&self.memory_[rng.random_range(0..l)]);
-            }
-        }
-        return v;
-    }
-
-    // Appends elements at the back, evicting the oldest from the front
-    // once the buffer is at capacity.
-    pub fn extend<I>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = TrainingElement>,
-    {
-        return self.memory_.extend(iter);
-    }
-
-    pub fn len(&self) -> usize{
-        return self.memory_.len();
-    }
-
-    pub fn is_empty(&self) -> bool{
-        return self.memory_.is_empty();
-    }
-}
-
-
-
-
 
 
 #[cfg(test)]
 mod tests{
     use super::*;
+    use crate::games::minipente::MiniPenteState;
 
-    fn element(outcome: f32) -> TrainingElement{
-        return TrainingElement{ state: vec![], mcts_posterior: vec![], outcome };
+    // A fresh, empty scratch directory under the system temp dir.
+    fn scratch_dir(name: &str) -> PathBuf{
+        let d = std::env::temp_dir().join(format!("tard_test_{}_{}", std::process::id(), name));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        return d;
     }
 
     #[test]
-    fn training_buffer_evicts_the_oldest_elements_at_capacity(){
-        let mut buf = TrainingBuffer::new(3);
-        assert!(buf.is_empty());
-        buf.extend((0..5).map(|i| element(i as f32)));
-        assert_eq!(buf.len(), 3);
-        let kept: Vec<f32> = buf.memory_.iter().map(|e| e.outcome).collect();
-        assert_eq!(kept, vec![2.0, 3.0, 4.0]);
+    fn model_meta_sidecar_sits_next_to_the_model_file(){
+        assert_eq!(model_meta_path(Path::new("ckpt/step_000512/model.bpk")),
+                   PathBuf::from("ckpt/step_000512/model.net.json"));
+        assert_eq!(model_meta_path(Path::new("model")), PathBuf::from("model.net.json"));
     }
 
     #[test]
-    fn training_buffer_samples_with_replacement(){
-        let mut buf = TrainingBuffer::new(10);
-        assert!(buf.sample(5).is_empty(), "sampling an empty buffer returns nothing");
-        buf.extend((0..3).map(|i| element(i as f32)));
-        let s = buf.sample(50);
-        assert_eq!(s.len(), 50);
-        assert!(s.iter().all(|e| (0.0..3.0).contains(&e.outcome)));
+    fn model_meta_roundtrips_and_is_required(){
+        let d = scratch_dir("netcfg");
+        let model = d.join("model.bpk");
+        assert!(read_model_meta(&model).is_err(), "a missing sidecar is an error");
+        let meta = ModelMeta{
+            game: "minipente".to_string(),
+            net: NetConfig{ channels: 64, blocks: 6, value_hidden: 32 },
+        };
+        write_model_meta(&model, &meta).unwrap();
+        assert_eq!(read_model_meta(&model).unwrap(), meta);
+        // Flat JSON; every field is required.
+        let json = fs::read_to_string(model_meta_path(&model)).unwrap();
+        assert!(json.contains("\"game\": \"minipente\"") && json.contains("\"channels\": 64"));
+        fs::write(model_meta_path(&model), r#"{"channels": 32, "blocks": 2, "value_hidden": 16}"#).unwrap();
+        assert!(read_model_meta(&model).is_err(), "the game field is required");
+        fs::write(model_meta_path(&model), "not json").unwrap();
+        assert!(read_model_meta(&model).is_err());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn check_game_rejects_a_model_for_another_game(){
+        let meta = |game: &str| ModelMeta{
+            game: game.to_string(),
+            net: NetConfig{ channels: 64, blocks: 6, value_hidden: 64 },
+        };
+        assert!(check_game::<MiniPenteState>(&meta("minipente")).is_ok());
+        let err = check_game::<MiniPenteState>(&meta("connect4")).unwrap_err();
+        assert!(err.to_string().contains("connect4"));
     }
 }

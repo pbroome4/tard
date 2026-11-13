@@ -37,8 +37,8 @@
 use std::fmt;
 use tracing::trace;
 
-use crate::gamestate::{Action, GameState, TextGame};
-use crate::tard::NetConfig;
+use crate::games::{Action, GameState, TextGame};
+use crate::model::NetConfig;
 
 /// Side length of the square frame. 22 pieces span at most 22 cells in any
 /// direction and every legal destination is next to the hive, so a

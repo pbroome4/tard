@@ -1,31 +1,28 @@
-// Play MiniPente against a trained model in a web browser. Serves a page on
-// localhost; the page sends the moves so far, and the server replays them
-// (the rules live only here) and runs the model's MCTS for the computer's
-// moves.
+//! `tard web`: play MiniPente against a trained model in a web browser.
+//! Serves web/minipente.html on localhost; the page sends the moves so far,
+//! and the server replays them (the rules live only here) and runs the
+//! model's MCTS for the computer's moves.
 use burn::tensor::Device;
-use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::PathBuf;
 use std::time::Instant;
 use tiny_http::{Header, Method, Request, Response, Server};
 use tracing::{info, warn};
-use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 
-use tard::engine::{mcts, select_action, DirichletHParams};
 use tard::evaluator::TardEvaluator;
-use tard::gamestate::{Action, GameState};
-use tard::minipente::{action_2_coord, MiniPenteState, Piece, COLS, ROWS};
-use tard::utils::load_model;
+use tard::games::minipente::{action_2_coord, MiniPenteState, Piece, COLS, ROWS};
+use tard::games::{Action, GameState};
+use tard::mcts::{mcts, select_action, DirichletHParams};
+use tard::model::load_model;
 
 const PAGE: &str = include_str!("../../web/minipente.html");
 // Caps what a request may ask for, so one click can't tie up the GPU for hours.
 const MAX_ROLLOUTS: usize = 50_000;
 const MAX_BODY_BYTES: u64 = 64 * 1024;
 
-#[derive(Parser, Debug)]
-#[command(about = "Play MiniPente against a trained Tard model in your web browser")]
-struct Args{
+#[derive(clap::Args, Debug)]
+pub struct Args{
     /// MiniPente model file (its <name>.net.json sidecar must sit next to it)
     #[arg(long, default_value = "model.bpk")]
     model: PathBuf,
@@ -184,14 +181,7 @@ fn handle(req: &mut Request, eval: &mut TardEvaluator, info: &ServerInfo) -> Res
     }
 }
 
-fn main(){
-    let args = Args::parse();
-    let filter = EnvFilter::from_default_env()
-        .add_directive(LevelFilter::WARN.into())
-        .add_directive("tard=info".parse().unwrap())
-        .add_directive("web=info".parse().unwrap());
-    tracing_subscriber::fmt().with_env_filter(filter).init();
-
+pub fn run(args: Args){
     let device = Device::default();
     let (tard, net) = load_model::<MiniPenteState>(&args.model, &device).unwrap_or_else(|e|{
         panic!("Failed to load model {}: {}", args.model.display(), e)
@@ -222,7 +212,7 @@ fn main(){
 #[cfg(test)]
 mod tests{
     use super::*;
-    use tard::minipente::coord_2_action;
+    use tard::games::minipente::coord_2_action;
 
     #[test]
     fn replay_rejects_illegal_and_late_moves(){
